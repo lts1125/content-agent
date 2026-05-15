@@ -20,6 +20,7 @@ from pathlib import Path
 
 from content_agent.agent_core import ContentAgent
 from content_agent.html_renderer import XiaohongshuRenderer
+from content_agent.quality_checker import QualityChecker
 
 
 DEFAULT_NOTES = """背景：下班后决定学 AI Agent 开发，想做一个内容改写 Agent 做副业。
@@ -156,16 +157,53 @@ def main():
         print(f"❌ 配置错误: {e}")
         sys.exit(1)
 
-    # 4. 生成内容
-    print("\n" + "=" * 50)
-    print("🤖 Agent 正在生成三平台文案...")
-    print("=" * 50)
+    # 4. 生成内容 + 质量检查 + 重试
+    checker = QualityChecker(agent.model)
+    result = None
+    current_notes = raw_notes
 
-    try:
-        result = agent.run(raw_notes)
-    except Exception as e:
-        print(f"❌ Agent 调用失败: {e}")
-        sys.exit(1)
+    for attempt in range(1, 4):
+        print(f"\n{'=' * 50}")
+        print(f"🤖 第 {attempt} 次生成三平台文案...")
+        print(f"{'=' * 50}")
+
+        try:
+            result = agent.run(current_notes)
+        except Exception as e:
+            print(f"❌ Agent 调用失败: {e}")
+            sys.exit(1)
+
+        # 质量检查
+        check = checker.check(
+            result.xiaohongshu,
+            result.gongzhonghao,
+            result.douyin,
+            attempt=attempt,
+        )
+
+        print(f"\n📊 质量检查结果 (第 {attempt} 次):")
+        rule_score = check.rule_details.get("overall_score", "N/A")
+        print(f"   规则校验: {rule_score}/100 {'✅' if check.rule_passed else '❌'}")
+        if check.llm_score:
+            print(f"   LLM 评分: 小红书={check.llm_score.xiaohongshu} 公众号={check.llm_score.gongzhonghao} 抖音={check.llm_score.douyin}")
+            print(f"   综合得分: {check.overall_score}/100")
+            print(f"   最弱平台: {check.llm_score.weakest}")
+        print(f"   总体判定: {'✅ 通过' if check.passed else '❌ 未通过'}")
+
+        if check.passed:
+            print(f"\n🎉 质量检查通过，共尝试 {attempt} 次")
+            break
+
+        if attempt < 3:
+            suggestion = check.retry_suggestion[:120]
+            print(f"\n🔄 即将第 {attempt + 1} 次重试，改进方向: {suggestion}...")
+            current_notes = (
+                f"\u3010请根据以下改进要求重新输出三平台文案】\n"
+                f"{check.retry_suggestion}\n\n"
+                f"--- 原始笔记 ---\n{raw_notes}"
+            )
+        else:
+            print(f"\n⚠️ 已重试 3 次未达标，使用最后一次结果")
 
     # 5. 保存文案（按日期子目录）
     base_output_dir = Path(args.output)
