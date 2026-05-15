@@ -85,13 +85,25 @@ python main.py -i notes/my_note.md
 python main.py -i notes/my_note.md -p xiaohongshu -o ./dist
 ```
 
+**启用搜索增强（自动补充背景资料）：**
+
+```bash
+# 使用 DuckDuckGo（免费，无需 API key）
+python main.py -i notes/my_note.md -r
+
+# 使用 Tavily（效果更好，需注册 API key）
+python main.py -i notes/my_note.md -r --search-engine tavily
+```
+
 **完整 CLI 参数：**
 
 ```
--i, --input     输入的笔记文件路径 (.md 或 .txt)
--o, --output    输出目录 (默认: output)
--p, --platforms 平台选择，逗号分隔 (默认: all，可选: xiaohongshu,gongzhonghao,douyin)
--c, --clean     清理同一天的旧文件后再生成
+-i, --input        输入的笔记文件路径 (.md 或 .txt)
+-o, --output       输出目录 (默认: output)
+-p, --platforms    平台选择，逗号分隔 (默认: all)
+-c, --clean        清理同一天的旧文件后再生成
+-r, --research     启用搜索增强，自动搜索相关背景资料
+--search-engine    搜索引擎选择 (默认: duckduckgo，可选: tavily)
 ```
 
 输出按日期分目录存放：
@@ -114,14 +126,16 @@ output/
 
 ```
 .
-├── main.py                      # CLI 入口：参数解析、调用 Agent、保存文件
+├── main.py                      # CLI 入口：参数解析、调度、保存文件
 ├── content_agent/
 │   ├── __init__.py
 │   ├── agent_core.py            # Agent 核心：多 Provider 模型配置 + 系统提示词
-│   └── html_renderer.py         # 小红书 HTML 配图卡片渲染
-├── notes/                       # 存放输入笔记（示例）
+│   ├── html_renderer.py         # 小红书 HTML 配图卡片渲染
+│   ├── quality_checker.py       # 混合质量检查（规则 + LLM 评分）
+│   └── research.py              # 搜索增强（DuckDuckGo / Tavily）
+├── notes/                       # 存放输入笔记和开发记录
 ├── .env                         # API Key 配置文件（gitignore）
-├── .env.example                 # 多 Provider 配置模板
+├── .env.example                 # 多 Provider + 搜索配置模板
 ├── .gitignore
 ├── README.md
 └── output/                      # 生成的文案存放目录（按日期子目录）
@@ -159,7 +173,9 @@ python main.py -i notes/你的笔记.md
 - [x] 支持多模型 Provider（DeepSeek / Kimi / MiniMax / OpenAI / 自定义）
 - [x] CLI 参数交互（选择平台、指定输入输出）
 - [x] 自动生成小红书 HTML 配图卡片
-- [ ] 接入 MCP 工具协议，自动搜索补充资料
+- [x] 混合质量检查（规则 + LLM 评分 + 重试）
+- [x] 搜索增强（DuckDuckGo / Tavily）
+- [ ] 批量处理多篇笔记
 - [ ] Web UI
 
 ---

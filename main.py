@@ -21,6 +21,7 @@ from pathlib import Path
 from content_agent.agent_core import ContentAgent
 from content_agent.html_renderer import XiaohongshuRenderer
 from content_agent.quality_checker import QualityChecker
+from content_agent.research import research_notes
 
 
 DEFAULT_NOTES = """背景：下班后决定学 AI Agent 开发，想做一个内容改写 Agent 做副业。
@@ -100,6 +101,8 @@ def main():
   python main.py -i notes.md                  从文件读取笔记
   python main.py -i notes.md -o ./dist        指定输出目录
   python main.py -i notes.md -p xiaohongshu   只生成小红书
+  python main.py -i notes.md -r               启用搜索增强
+  python main.py -i notes.md -r --search-engine tavily  用 Tavily 搜索
         """,
     )
     parser.add_argument(
@@ -121,6 +124,17 @@ def main():
         action="store_true",
         help="清理同一天的旧文件后再生成（默认保留历史文件）"
     )
+    parser.add_argument(
+        "--research", "-r",
+        action="store_true",
+        help="启用搜索增强，在生成前自动搜索相关背景资料"
+    )
+    parser.add_argument(
+        "--search-engine",
+        default="duckduckgo",
+        choices=["duckduckgo", "tavily"],
+        help="搜索引擎选择（默认: duckduckgo，无需 API key）"
+    )
 
     args = parser.parse_args()
 
@@ -136,6 +150,15 @@ def main():
     else:
         raw_notes = DEFAULT_NOTES
         print("📄 未指定输入文件，使用默认笔记")
+
+    # 搜索增强（可选）
+    if args.research:
+        raw_notes = research_notes(
+            raw_notes,
+            search_engine=args.search_engine,
+            max_results=3,
+            verbose=True,
+        )
 
     # 2. 解析平台选项
     platform_arg = args.platforms.lower().strip()
