@@ -2,3 +2,9 @@
 .env
 __pycache__
 *.pyc
+output/
+.DS_Store
+*.png
+*.html
+!content_agent/**/*.html
+
