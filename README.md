@@ -42,6 +42,9 @@ cd content-agent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install pydantic-ai python-dotenv
+
+# 如果需要 Web UI，额外安装：
+pip install gradio
 ```
 
 ### 3. 配置 API Key
@@ -122,23 +125,47 @@ output/
 
 ---
 
+## Web UI （可视化界面）
+
+除了 CLI，还提供了基于 Gradio 的 Web 界面，适合不喜欢命令行的用户。
+
+**启动 Web UI：**
+
+```bash
+pip install gradio  # 首次使用需安装
+python web_ui.py
+```
+
+然后打开浏览器访问 `http://127.0.0.1:7860`。
+
+**界面功能：**
+- 粘贴或上传笔记文件
+- 多选平台（小红书/公众号/抖音）
+- 开关搜索增强
+- 实时显示生成进度
+- 文案支持一键复制
+- 三个 Tab 分别展示三平台结果
+
+---
+
 ## 项目结构
 
 ```
 .
-├── main.py                      # CLI 入口：参数解析、调度、保存文件
+├── main.py                      # CLI 入口
+├── web_ui.py                    # Web UI 入口（Gradio）
 ├── content_agent/
 │   ├── __init__.py
-│   ├── agent_core.py            # Agent 核心：多 Provider 模型配置 + 系统提示词
-│   ├── html_renderer.py         # 小红书 HTML 配图卡片渲染
-│   ├── quality_checker.py       # 混合质量检查（规则 + LLM 评分）
-│   └── research.py              # 搜索增强（DuckDuckGo / Tavily）
+│   ├── agent_core.py            # Agent 核心
+│   ├── html_renderer.py         # 小红书 HTML 配图卡片
+│   ├── quality_checker.py       # 混合质量检查
+│   └── research.py              # 搜索增强
 ├── notes/                       # 存放输入笔记和开发记录
-├── .env                         # API Key 配置文件（gitignore）
-├── .env.example                 # 多 Provider + 搜索配置模板
+├── .env                         # API Key 配置（gitignore）
+├── .env.example                 # 配置模板
 ├── .gitignore
 ├── README.md
-└── output/                      # 生成的文案存放目录（按日期子目录）
+└── output/                      # 生成的文案（按日期子目录）
 ```
 
 ---
@@ -175,8 +202,8 @@ python main.py -i notes/你的笔记.md
 - [x] 自动生成小红书 HTML 配图卡片
 - [x] 混合质量检查（规则 + LLM 评分 + 重试）
 - [x] 搜索增强（DuckDuckGo / Tavily）
-- [ ] 批量处理多篇笔记
-- [ ] Web UI
+- [x] 批量处理多篇笔记
+- [x] Web UI（Gradio）
 
 ---
 
