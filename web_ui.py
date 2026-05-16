@@ -68,7 +68,7 @@ def _get_checker():
     return _checker
 
 
-def generate_content(note_text, note_file, platforms, enable_research, search_engine, progress=gr.Progress()):
+def generate_content(note_text, note_file, platforms, enable_research, search_engine, style, progress=gr.Progress()):
     """
     Gradio 处理函数
 
@@ -82,11 +82,11 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             with open(note_file, "r", encoding="utf-8") as f:
                 note_text = f.read()
         except Exception as e:
-            return "", "", "", f"❌ 读取文件失败: {e}"
+            return "", "", "", "", f"❌ 读取文件失败: {e}"
 
     note_text = note_text.strip() if note_text else ""
     if not note_text:
-        return "", "", "", "⚠️ 请输入或上传笔记"
+        return "", "", "", "", "⚠️ 请输入或上传笔记"
 
     # 解析平台
     platform_map = {
@@ -97,7 +97,16 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     enabled = {platform_map[p] for p in platforms if p in platform_map}
 
     if not enabled:
-        return "", "", "", "⚠️ 请至少选择一个平台"
+        return "", "", "", "", "⚠️ 请至少选择一个平台"
+
+    # 风格指令
+    style_instructions = {
+        "专业干货": "",
+        "轻松口语": "\n【风格要求：语气像朋友聊天，轻松自然，多用生活化比喻，少讲大道理】",
+        "情绪共鸣": "\n【风格要求：开头点出痛点让读者产生共鸣，语气有温度，适当表达焦虑和成就感】",
+        "悬念钩子": "\n【风格要求：开头埋悬念钩子，正文逐步揭秘，结尾反转或出人意料】",
+    }
+    style_note = style_instructions.get(style, "")
 
     progress(0.1, desc="初始化 Agent...")
     agent = _get_agent()
@@ -125,15 +134,18 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
         except Exception as e:
             print(f"搜索增强失败: {e}")
 
+    # 笔记内容前追加风格指令
+    styled_notes = current_notes + style_note if style_note else current_notes
+
     # 生成 + 质检
     progress(0.3, desc="生成中...")
     generation_result = None
 
     for attempt in range(1, 4):
         try:
-            generation_result = agent.run(current_notes)
+            generation_result = agent.run(styled_notes)
         except Exception as e:
-            return "", "", "", f"❌ Agent 调用失败: {e}"
+            return "", "", "", "", f"❌ Agent 调用失败: {e}"
 
         progress(0.3 + attempt * 0.15, desc=f"质量检查第 {attempt} 次...")
 
@@ -236,6 +248,12 @@ with gr.Blocks(
                     value="duckduckgo",
                 )
 
+                style_radio = gr.Radio(
+                    label="🎨 文案风格",
+                    choices=["专业干货", "轻松口语", "情绪共鸣", "悬念钩子"],
+                    value="专业干货",
+                )
+
             generate_btn = gr.Button("🚀 生成三平台文案", variant="primary", size="lg")
 
             status_text = gr.Textbox(
@@ -280,6 +298,7 @@ with gr.Blocks(
             platform_check,
             enable_research,
             search_engine,
+            style_radio,
         ],
         outputs=[
             xiaohongshu_output,
