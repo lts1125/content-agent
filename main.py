@@ -17,6 +17,7 @@ import datetime
 import os
 import sys
 from pathlib import Path
+from typing import List
 
 from content_agent.agent_core import ContentAgent
 from content_agent.html_renderer import XiaohongshuRenderer
@@ -91,6 +92,145 @@ def _get_date_subdir(base_dir: Path) -> Path:
     return date_dir
 
 
+def _collect_notes(input_path: Path) -> List[Path]:
+    """
+    收集笔记文件。
+    如果是文件，直接返回。
+    如果是目录，遍历所有 .md 和 .txt 文件。
+    """
+    if input_path.is_file():
+        return [input_path]
+
+    notes = []
+    for ext in ("*.md", "*.txt"):
+        notes.extend(input_path.glob(ext))
+        notes.extend(input_path.rglob(ext))  # 递归子目录
+
+    # 去重并排序
+    seen = set()
+    unique = []
+    for p in sorted(notes):
+        if str(p) not in seen:
+            seen.add(str(p))
+            unique.append(p)
+    return unique
+
+
+def process_single_note(
+    note_path: Path,
+    raw_notes: str,
+    agent: ContentAgent,
+    checker: QualityChecker,
+    enabled_platforms: set,
+    args,
+    note_output_dir: Path,
+) -> dict:
+    """
+    处理单个笔记，返回处理结果
+
+    Returns:
+        {"success": bool, "saved_files": list, "error": str|None}
+    """
+    note_name = note_path.stem
+    result = {"success": False, "saved_files": [], "error": None}
+
+    print(f"\n{'=' * 60}")
+    print(f"📄 处理: {note_name} ({len(raw_notes)} 字)")
+    print(f"{'=' * 60}")
+
+    current_notes = raw_notes
+
+    # 搜索增强（可选）
+    if args.research:
+        try:
+            from pydantic_ai import Agent
+            keyword_agent = Agent(
+                agent.model,
+                system_prompt="你是一个关键词提取助手，从技术笔记中提取精准的搜索关键词。"
+            )
+            keywords = extract_keywords_with_llm(raw_notes, keyword_agent)
+            print(f"   💡 LLM 提取关键词: {keywords}")
+        except Exception as e:
+            print(f"   ⚠️ LLM 提取失败，使用启发式: {e}")
+            keywords = None
+
+        current_notes = research_notes(
+            current_notes,
+            search_engine=args.search_engine,
+            max_results=3,
+            verbose=True,
+            keywords=keywords,
+        )
+
+    # 生成内容 + 质量检查 + 重试
+    generation_result = None
+    for attempt in range(1, 4):
+        print(f"\n   🤖 第 {attempt} 次生成三平台文案...")
+
+        try:
+            generation_result = agent.run(current_notes)
+        except Exception as e:
+            result["error"] = f"Agent 调用失败: {e}"
+            print(f"   ❌ {result['error']}")
+            return result
+
+        check = checker.check(
+            generation_result.xiaohongshu,
+            generation_result.gongzhonghao,
+            generation_result.douyin,
+            attempt=attempt,
+        )
+
+        print(f"   📊 质量检查: 综合 {check.overall_score}/100")
+
+        if check.passed:
+            print(f"   ✅ 通过，共 {attempt} 次")
+            break
+
+        if attempt < 3:
+            print(f"   🔄 即将第 {attempt + 1} 次重试...")
+            current_notes = (
+                f"\u3010请根据以下改进要求重新输出三平台文案】\n"
+                f"{check.retry_suggestion}\n\n"
+                f"--- 原始笔记 ---\n{raw_notes}"
+            )
+        else:
+            print(f"   ⚠️ 重试 3 次未达标，使用最后结果")
+
+    if generation_result is None:
+        result["error"] = "生成结果为空"
+        return result
+
+    # 保存文案
+    saved = []
+    if "xiaohongshu" in enabled_platforms:
+        f = save_markdown("xiaohongshu", generation_result.xiaohongshu, note_output_dir)
+        saved.append(f)
+    if "gongzhonghao" in enabled_platforms:
+        f = save_markdown("gongzhonghao", generation_result.gongzhonghao, note_output_dir)
+        saved.append(f)
+    if "douyin" in enabled_platforms:
+        f = save_markdown("douyin", generation_result.douyin, note_output_dir)
+        saved.append(f)
+
+    print(f"   ✅ 已保存 {len(saved)} 个文件")
+
+    # 生成小红书配图
+    if "xiaohongshu" in enabled_platforms:
+        try:
+            renderer = XiaohongshuRenderer()
+            html_path = renderer.render(generation_result.xiaohongshu, note_output_dir / "配图")
+            html_name = Path(html_path).name
+            print(f"   🎨 配图已生成: {html_name}")
+        except Exception as e:
+            print(f"   ⚠️ 配图生成失败: {e}")
+
+    result["success"] = True
+    result["saved_files"] = saved
+    return result
+
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Content Agent - AI 内容改写工具",
@@ -99,15 +239,16 @@ def main():
 示例:
   python main.py                              使用默认笔记演示
   python main.py -i notes.md                  从文件读取笔记
+  python main.py -i notes/                    批量处理目录下所有笔记
   python main.py -i notes.md -o ./dist        指定输出目录
   python main.py -i notes.md -p xiaohongshu   只生成小红书
   python main.py -i notes.md -r               启用搜索增强
-  python main.py -i notes.md -r --search-engine tavily  用 Tavily 搜索
+  python main.py -i notes/ -r --search-engine tavily  批量+搜索增强
         """,
     )
     parser.add_argument(
         "--input", "-i",
-        help="输入的笔记文件路径 (.md 或 .txt)"
+        help="输入的笔记文件或目录 (.md / .txt)"
     )
     parser.add_argument(
         "--output", "-o",
@@ -117,7 +258,7 @@ def main():
     parser.add_argument(
         "--platforms", "-p",
         default="all",
-        help="平台选择，用逗号分隔，默认 all (选项: xiaohongshu,gongzhonghao,douyin)"
+        help="平台选择，逗号分隔，默认 all (选项: xiaohongshu,gongzhonghao,douyin)"
     )
     parser.add_argument(
         "--clean", "-c",
@@ -138,39 +279,23 @@ def main():
 
     args = parser.parse_args()
 
-    # 1. 读取输入
+    # 1. 确定输入
     if args.input:
         input_path = Path(args.input)
         if not input_path.exists():
-            print(f"❌ 错误: 输入文件不存在: {args.input}")
+            print(f"❌ 错误: 输入路径不存在: {args.input}")
             sys.exit(1)
-        with open(input_path, "r", encoding="utf-8") as f:
-            raw_notes = f.read()
-        print(f"📄 已读取输入: {args.input} ({len(raw_notes)} 字)")
+        note_files = _collect_notes(input_path)
+        if not note_files:
+            print(f"⚠️ 未找到任何 .md 或 .txt 笔记文件")
+            sys.exit(0)
+        is_batch = input_path.is_dir()
     else:
-        raw_notes = DEFAULT_NOTES
-        print("📄 未指定输入文件，使用默认笔记")
+        # 默认模式：使用内置笔记
+        note_files = [None]
+        is_batch = False
 
-    # 搜索增强（可选）
-    if args.research:
-        # 用 LLM 提取关键词（更精准）
-        try:
-            from pydantic_ai import Agent
-            agent = ContentAgent()
-            keyword_agent = Agent(agent.model, system_prompt="你是一个关键词提取助手，从技术笔记中提取精准的搜索关键词。")
-            keywords = extract_keywords_with_llm(raw_notes, keyword_agent)
-            print(f"   💡 LLM 提取关键词: {keywords}")
-        except Exception as e:
-            print(f"   ⚠️ LLM 提取失败，使用启发式: {e}")
-            keywords = None
-
-        raw_notes = research_notes(
-            raw_notes,
-            search_engine=args.search_engine,
-            max_results=3,
-            verbose=True,
-            keywords=keywords,
-        )
+    print(f"📁 共发现 {len(note_files)} 个笔记文件" if is_batch else "📄 单文件模式")
 
     # 2. 解析平台选项
     platform_arg = args.platforms.lower().strip()
@@ -185,118 +310,81 @@ def main():
             print(f"   有效选项: {', '.join(valid)}")
             sys.exit(1)
 
-    # 3. 初始化 Agent
+    # 3. 初始化共享的 Agent 和 Checker
     try:
         agent = ContentAgent()
     except ValueError as e:
         print(f"❌ 配置错误: {e}")
         sys.exit(1)
 
-    # 4. 生成内容 + 质量检查 + 重试
     checker = QualityChecker(agent.model)
-    result = None
-    current_notes = raw_notes
 
-    for attempt in range(1, 4):
-        print(f"\n{'=' * 50}")
-        print(f"🤖 第 {attempt} 次生成三平台文案...")
-        print(f"{'=' * 50}")
-
-        try:
-            result = agent.run(current_notes)
-        except Exception as e:
-            print(f"❌ Agent 调用失败: {e}")
-            sys.exit(1)
-
-        # 质量检查
-        check = checker.check(
-            result.xiaohongshu,
-            result.gongzhonghao,
-            result.douyin,
-            attempt=attempt,
-        )
-
-        print(f"\n📊 质量检查结果 (第 {attempt} 次):")
-        rule_score = check.rule_details.get("overall_score", "N/A")
-        print(f"   规则校验: {rule_score}/100 {'✅' if check.rule_passed else '❌'}")
-        if check.llm_score:
-            print(f"   LLM 评分: 小红书={check.llm_score.xiaohongshu} 公众号={check.llm_score.gongzhonghao} 抖音={check.llm_score.douyin}")
-            print(f"   综合得分: {check.overall_score}/100")
-            print(f"   最弱平台: {check.llm_score.weakest}")
-        print(f"   总体判定: {'✅ 通过' if check.passed else '❌ 未通过'}")
-
-        if check.passed:
-            print(f"\n🎉 质量检查通过，共尝试 {attempt} 次")
-            break
-
-        if attempt < 3:
-            suggestion = check.retry_suggestion[:120]
-            print(f"\n🔄 即将第 {attempt + 1} 次重试，改进方向: {suggestion}...")
-            current_notes = (
-                f"\u3010请根据以下改进要求重新输出三平台文案】\n"
-                f"{check.retry_suggestion}\n\n"
-                f"--- 原始笔记 ---\n{raw_notes}"
-            )
-        else:
-            print(f"\n⚠️ 已重试 3 次未达标，使用最后一次结果")
-
-    # 5. 保存文案（按日期子目录）
+    # 4. 处理笔记
     base_output_dir = Path(args.output)
-    output_dir = _get_date_subdir(base_output_dir)
+    date_dir = _get_date_subdir(base_output_dir)
 
-    # 如果传了 --clean，清理同一天的旧文件
-    if args.clean and output_dir.exists():
+    # 如果是单文件模式且传了 --clean，清理日期目录
+    if not is_batch and args.clean and date_dir.exists():
         import shutil
         cleaned = 0
-        for item in output_dir.iterdir():
+        for item in date_dir.iterdir():
             if item.is_file():
                 item.unlink()
                 cleaned += 1
-            elif item.is_dir() and item.name == "配图":
+            elif item.is_dir():
                 shutil.rmtree(item)
                 cleaned += 1
         if cleaned > 0:
-            print(f"\n🚿 已清理 {cleaned} 个旧文件/目录")
+            print(f"🚿 已清理 {cleaned} 个旧文件/目录")
 
-    saved_files = []
-    if "xiaohongshu" in enabled_platforms:
-        f = save_markdown("xiaohongshu", result.xiaohongshu, output_dir)
-        saved_files.append(f)
-    if "gongzhonghao" in enabled_platforms:
-        f = save_markdown("gongzhonghao", result.gongzhonghao, output_dir)
-        saved_files.append(f)
-    if "douyin" in enabled_platforms:
-        f = save_markdown("douyin", result.douyin, output_dir)
-        saved_files.append(f)
+    results = []
+    for idx, note_path in enumerate(note_files, 1):
+        if note_path is None:
+            # 默认笔记模式
+            raw_notes = DEFAULT_NOTES
+            note_name = "default"
+            note_output_dir = date_dir
+        else:
+            with open(note_path, "r", encoding="utf-8") as f:
+                raw_notes = f.read()
+            note_name = note_path.stem
+            if is_batch:
+                # 批量模式：每个笔记单独子目录
+                note_output_dir = date_dir / note_name
+                note_output_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                note_output_dir = date_dir
 
-    print(f"\n✅ 文案保存成功！共 {len(saved_files)} 个文件:")
-    for f in saved_files:
-        print(f"   • {f}")
+        print(f"\n📊 进度: {idx}/{len(note_files)}")
 
-    # 6. 生成小红书配图（保存到日期子目录下的配图文件夹）
-    if "xiaohongshu" in enabled_platforms:
-        print("\n🎨 正在生成小红书配图...")
-        try:
-            renderer = XiaohongshuRenderer()
-            html_path = renderer.render(result.xiaohongshu, output_dir / "配图")
-            print(f"   ✅ 配图已生成: {html_path}")
-            print(f"   💡 提示: 用浏览器打开该 HTML 文件，逐张截图即可发小红书")
-        except Exception as e:
-            print(f"   ⚠️ 配图生成失败: {e}")
+        result = process_single_note(
+            note_path=note_path or Path("default"),
+            raw_notes=raw_notes,
+            agent=agent,
+            checker=checker,
+            enabled_platforms=enabled_platforms,
+            args=args,
+            note_output_dir=note_output_dir,
+        )
+        results.append(result)
 
-    # 7. 预览
-    print("\n" + "-" * 50)
-    if "xiaohongshu" in enabled_platforms:
-        print(f"\n📱 小红书预览:")
-        print(result.xiaohongshu[:300] + "...")
-    if "gongzhonghao" in enabled_platforms:
-        print(f"\n💬 公众号预览:")
-        print(result.gongzhonghao[:300] + "...")
-    if "douyin" in enabled_platforms:
-        print(f"\n🎵 抖音预览:")
-        print(result.douyin[:300] + "...")
+    # 5. 总结
+    success_count = sum(1 for r in results if r["success"])
+    total_files = sum(len(r["saved_files"]) for r in results)
 
-    print(f"\n🎉 全部完成！输出目录: {output_dir.absolute()}")
+    print(f"\n{'=' * 60}")
+    print(f"🎉 全部完成！{success_count}/{len(note_files)} 个笔记处理成功")
+    print(f"📁 共生成 {total_files} 个文件")
+    print(f"📂 输出目录: {date_dir.absolute()}")
+    print(f"{'=' * 60}")
+
+    # 失败的笔记打印错误
+    failed = [(note_files[i].name if note_files[i] else "default", r["error"])
+              for i, r in enumerate(results) if not r["success"]]
+    if failed:
+        print(f"\n❌ 失败的笔记:")
+        for name, err in failed:
+            print(f"   • {name}: {err}")
 
 
 if __name__ == "__main__":
