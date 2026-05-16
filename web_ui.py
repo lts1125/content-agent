@@ -33,6 +33,7 @@ except ImportError as e:
 from content_agent.agent_core import ContentAgent
 from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
+from content_agent.html_renderer import XiaohongshuRenderer
 
 
 # 缓存 Agent 实例（避免每次都重新初始化）
@@ -146,10 +147,23 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     gongzhonghao_text = generation_result.gongzhonghao if "gongzhonghao" in enabled else "（未选择此平台）"
     douyin_text = generation_result.douyin if "douyin" in enabled else "（未选择此平台）"
 
+    # 生成小红书 HTML 卡片预览
+    xiaohongshu_html = ""
+    if "xiaohongshu" in enabled and xiaohongshu_text:
+        try:
+            renderer = XiaohongshuRenderer()
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                html_path = renderer.render(xiaohongshu_text, tmpdir)
+                with open(html_path, "r", encoding="utf-8") as f:
+                    xiaohongshu_html = f.read()
+        except Exception as e:
+            print(f"HTML 预览生成失败: {e}")
+
     status = f"✅ 生成完成！平台: {', '.join(platforms)} | 笔记: {len(note_text)} 字"
 
     progress(1.0, desc="完成")
-    return xiaohongshu_text, gongzhonghao_text, douyin_text, status
+    return xiaohongshu_text, gongzhonghao_text, douyin_text, xiaohongshu_html, status
 
 
 # ==================== Gradio 界面 ====================
@@ -227,6 +241,7 @@ with gr.Blocks(
                         lines=18,
                         show_copy_button=True,
                     )
+                    xiaohongshu_preview = gr.HTML()
 
                 with gr.TabItem("💬 公众号"):
                     gongzhonghao_output = gr.Textbox(
@@ -256,6 +271,7 @@ with gr.Blocks(
             xiaohongshu_output,
             gongzhonghao_output,
             douyin_output,
+            xiaohongshu_preview,
             status_text,
         ],
     )
