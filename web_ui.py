@@ -14,6 +14,7 @@ Content Agent - Web UI
 """
 
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -34,6 +35,18 @@ from content_agent.agent_core import ContentAgent
 from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
 from content_agent.html_renderer import XiaohongshuRenderer
+
+
+def _scale_html(html: str, scale: float = 0.48) -> str:
+    """将 HTML 中所有 px 值按比例缩放，用于预览适配容器宽度"""
+    def replace_px(match):
+        val = int(match.group(1))
+        # 极小的值不缩放（避免 border-radius 等变得太小）
+        if val <= 3:
+            return match.group(0)
+        scaled = max(1, int(val * scale))
+        return f"{scaled}px"
+    return re.sub(r'(\d+)px', replace_px, html)
 
 
 # 缓存 Agent 实例（避免每次都重新初始化）
@@ -152,16 +165,12 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     if "xiaohongshu" in enabled and xiaohongshu_text:
         try:
             renderer = XiaohongshuRenderer()
-            import tempfile
             with tempfile.TemporaryDirectory() as tmpdir:
                 html_path = renderer.render(xiaohongshu_text, tmpdir)
                 with open(html_path, "r", encoding="utf-8") as f:
                     html_content = f.read()
-                # 缩小预览，适配右栏宽度
-                xiaohongshu_html = html_content.replace(
-                    "</head>",
-                    "<style>body{zoom:0.5;}</style></head>"
-                )
+                # 缩小预览适配右栏宽度（0.48 约 432px）
+                xiaohongshu_html = _scale_html(html_content, scale=0.48)
         except Exception as e:
             print(f"HTML 预览生成失败: {e}")
 
