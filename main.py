@@ -21,7 +21,7 @@ from pathlib import Path
 from content_agent.agent_core import ContentAgent
 from content_agent.html_renderer import XiaohongshuRenderer
 from content_agent.quality_checker import QualityChecker
-from content_agent.research import research_notes
+from content_agent.research import research_notes, extract_keywords_with_llm
 
 
 DEFAULT_NOTES = """背景：下班后决定学 AI Agent 开发，想做一个内容改写 Agent 做副业。
@@ -153,11 +153,23 @@ def main():
 
     # 搜索增强（可选）
     if args.research:
+        # 用 LLM 提取关键词（更精准）
+        try:
+            from pydantic_ai import Agent
+            agent = ContentAgent()
+            keyword_agent = Agent(agent.model, system_prompt="你是一个关键词提取助手，从技术笔记中提取精准的搜索关键词。")
+            keywords = extract_keywords_with_llm(raw_notes, keyword_agent)
+            print(f"   💡 LLM 提取关键词: {keywords}")
+        except Exception as e:
+            print(f"   ⚠️ LLM 提取失败，使用启发式: {e}")
+            keywords = None
+
         raw_notes = research_notes(
             raw_notes,
             search_engine=args.search_engine,
             max_results=3,
             verbose=True,
+            keywords=keywords,
         )
 
     # 2. 解析平台选项
