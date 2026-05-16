@@ -43,8 +43,9 @@ with gr.TabItem("📱 小红书"):
 
 ## 踩坑记录
 
-1. **gr.HTML 不支持 label 参数** — Gradio 4.44.1 的 `gr.HTML` 组件没有 `label` 参数，传入后被忽略，后去掉
-2. **返回值必须一一对应** — `generate_btn.click(outputs=[...])` 的 outputs 列表必须与 `generate_content()` 返回值数量一致，否则绑定失败
+2. **gr.HTML 不支持 label 参数** — Gradio 4.44.1 的 `gr.HTML` 组件没有 `label` 参数，传入后被忽略，后去掉
+3. **返回值必须一一对应** — `generate_btn.click(outputs=[...])` 的 outputs 列表必须与 `generate_content()` 返回值数量一致，否则绑定失败
+4. **HTML 卡片太宽溢出** — 原版卡片宽度 900px，在 Gradio 右栏显示不全。通过注入 `zoom:0.5` 缩小至 450px，适配右栏宽度
 
 ## 使用方法
 

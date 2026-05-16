@@ -156,7 +156,12 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             with tempfile.TemporaryDirectory() as tmpdir:
                 html_path = renderer.render(xiaohongshu_text, tmpdir)
                 with open(html_path, "r", encoding="utf-8") as f:
-                    xiaohongshu_html = f.read()
+                    html_content = f.read()
+                # 缩小预览，适配右栏宽度
+                xiaohongshu_html = html_content.replace(
+                    "</head>",
+                    "<style>body{zoom:0.5;}</style></head>"
+                )
         except Exception as e:
             print(f"HTML 预览生成失败: {e}")
 
