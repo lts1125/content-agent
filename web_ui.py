@@ -24,8 +24,10 @@ load_dotenv()
 
 try:
     import gradio as gr
-except ImportError:
-    print("❌ 请先安装 Gradio: pip install gradio")
+except ImportError as e:
+    print(f"❌ Gradio 导入失败: {e}")
+    print("提示: 请确保已激活虚拟环境，然后运行: pip install gradio")
+    print("示例: source .venv/bin/activate && pip install gradio")
     sys.exit(1)
 
 from content_agent.agent_core import ContentAgent
@@ -286,4 +288,6 @@ if __name__ == "__main__":
         server_name="127.0.0.1",
         server_port=7860,
         show_error=True,
+        share=False,
+        inbrowser=False,
     )
