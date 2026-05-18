@@ -373,7 +373,9 @@ def main():
                 note_output_dir = date_dir / note_name
                 note_output_dir.mkdir(parents=True, exist_ok=True)
             else:
-                note_output_dir = date_dir
+                # 单文件模式：也创建笔记名子目录，保持结构统一
+                note_output_dir = date_dir / note_name
+                note_output_dir.mkdir(parents=True, exist_ok=True)
 
         print(f"\n📊 进度: {idx}/{len(note_files)}")
 

@@ -230,6 +230,7 @@ def _scale_html(html: str, scale: float = 0.48) -> str:
 # 缓存 Agent 实例（避免每次都重新初始化）
 _agent = None
 _checker = None
+_scheduler = None
 
 
 def _get_agent():
@@ -970,6 +971,44 @@ with gr.Blocks(
                         export_docx_dy_btn = gr.Button("📄 导出 Word", size="sm")
                     douyin_download = gr.File(label="下载文件", visible=False)
 
+                with gr.TabItem("⏰ 定时任务"):
+                    gr.Markdown("### ⏰ 定时任务管理")
+                    gr.Markdown("每个任务绑定一个具体笔记文件（如 `notes/daily.md`），到点后自动生成文案。也可以填写目录，会处理目录下所有笔记。")
+
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("#### 添加任务")
+                            task_name_input = gr.Textbox(label="任务名称", placeholder="例如：每日早报", value="每日生成")
+                            task_input_dir = gr.Textbox(label="输入文件路径", placeholder="notes/daily.md 或目录 notes/", value="notes/daily.md")
+                            task_output_dir = gr.Textbox(label="输出目录", placeholder="output/", value="output")
+                            with gr.Row():
+                                task_hour = gr.Dropdown(
+                                    label="小时",
+                                    choices=[f"{h:02d}" for h in range(24)],
+                                    value="09",
+                                )
+                                task_minute = gr.Dropdown(
+                                    label="分钟",
+                                    choices=[f"{m:02d}" for m in range(0, 60, 5)],
+                                    value="00",
+                                )
+                            task_weekdays = gr.CheckboxGroup(
+                                label="执行日期（不选=每天）",
+                                choices=["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+                            )
+                            add_task_btn = gr.Button("➕ 添加任务", variant="primary")
+                            task_status = gr.Textbox(label="状态", value="等待操作...", interactive=False)
+
+                        with gr.Column(scale=1):
+                            gr.Markdown("#### 任务列表")
+                            task_dropdown = gr.Dropdown(label="选择任务", choices=[], value=None)
+                            task_detail = gr.Markdown("点击刷新查看任务列表")
+                            with gr.Row():
+                                refresh_tasks_btn = gr.Button("🔄 刷新")
+                                run_now_btn = gr.Button("▶️ 立即执行", variant="secondary")
+                                toggle_btn = gr.Button("⏸️ 启用/暂停")
+                                delete_task_btn = gr.Button("🗑️ 删除", variant="stop")
+
             with gr.Group():
                 gr.Markdown("### 🏷️ 推荐标签/话题")
                 tags_output = gr.Textbox(
@@ -1009,6 +1048,116 @@ with gr.Blocks(
                     lines=10,
                     show_copy_button=True,
                 )
+
+    # ==================== 定时任务处理函数 ====================
+
+    def _get_scheduler():
+        """获取调度器单例（延迟初始化，避免导入失败）"""
+        global _scheduler
+        if _scheduler is None:
+            try:
+                from content_agent.scheduler import TaskScheduler
+                _scheduler = TaskScheduler()
+                _scheduler.start()
+            except ImportError as e:
+                print(f"[定时任务] 初始化失败: {e}")
+                return None
+        return _scheduler
+
+    def _format_task_list(tasks: list[dict]) -> str:
+        if not tasks:
+            return "**暂无定时任务**"
+        lines = [
+            "| 名称 | 时间 | 输入 | 输出 | 状态 | 上次运行 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for t in tasks:
+            if t.get("weekdays"):
+                names = ["一", "二", "三", "四", "五", "六", "日"]
+                wd_str = "周" + "、".join(names[wd] for wd in t["weekdays"])
+            else:
+                wd_str = "每天"
+            time_str = f"{t['hour']:02d}:{t['minute']:02d}"
+            status = "🟢 启用" if t["enabled"] else "🔴 暂停"
+            last = t.get("last_run", "从未")[:16] if t.get("last_run") else "从未"
+            last_status = t.get("last_status", "")
+            if last_status and last_status != "success":
+                last += f" ({last_status})"
+            lines.append(
+                f"| {t['name']} | {wd_str} {time_str} | {t['input_dir']} | {t['output_dir']} | {status} | {last} |"
+            )
+        return "\n".join(lines)
+
+    def refresh_scheduled_tasks():
+        scheduler = _get_scheduler()
+        if scheduler is None:
+            return gr.Dropdown(), "**定时任务功能未启用**（缺少 schedule 库，请运行 `pip install schedule`）"
+        tasks = scheduler.list_tasks()
+        choices = [(f"{t['name']} ({t['hour']:02d}:{t['minute']:02d})", t["id"]) for t in tasks]
+        return gr.Dropdown(choices=choices, value=None), _format_task_list(tasks)
+
+    def add_scheduled_task(name, input_dir, output_dir, hour, minute, weekdays):
+        scheduler = _get_scheduler()
+        if scheduler is None:
+            return "❌ 定时任务功能未启用（缺少 schedule 库）", gr.Dropdown(), ""
+
+        wd_map = {"周一": 0, "周二": 1, "周三": 2, "周四": 3, "周五": 4, "周六": 5, "周日": 6}
+        weekdays_int = [wd_map[w] for w in (weekdays or [])]
+
+        try:
+            task_id = scheduler.add_task(
+                name or "未命名任务",
+                input_dir or "notes",
+                output_dir or "output",
+                int(hour) if hour else 9,
+                int(minute) if minute else 0,
+                weekdays_int,
+            )
+            tasks = scheduler.list_tasks()
+            choices = [(f"{t['name']} ({t['hour']:02d}:{t['minute']:02d})", t["id"]) for t in tasks]
+            return (
+                f"✅ 任务已添加: {name}",
+                gr.Dropdown(choices=choices, value=task_id),
+                _format_task_list(tasks),
+            )
+        except Exception as e:
+            return f"❌ 添加失败: {e}", gr.Dropdown(), ""
+
+    def delete_scheduled_task(task_id):
+        scheduler = _get_scheduler()
+        if scheduler is None:
+            return "❌ 定时任务功能未启用", gr.Dropdown(), ""
+        if not task_id:
+            return "⚠️ 请先选择任务", gr.Dropdown(), ""
+        if scheduler.remove_task(task_id):
+            tasks = scheduler.list_tasks()
+            choices = [(f"{t['name']} ({t['hour']:02d}:{t['minute']:02d})", t["id"]) for t in tasks]
+            return "✅ 任务已删除", gr.Dropdown(choices=choices, value=None), _format_task_list(tasks)
+        return "❌ 删除失败", gr.Dropdown(), ""
+
+    def toggle_scheduled_task(task_id):
+        scheduler = _get_scheduler()
+        if scheduler is None:
+            return "❌ 定时任务功能未启用", ""
+        if not task_id:
+            return "⚠️ 请先选择任务", ""
+        result = scheduler.toggle_task(task_id)
+        if result is not None:
+            tasks = scheduler.list_tasks()
+            choices = [(f"{t['name']} ({t['hour']:02d}:{t['minute']:02d})", t["id"]) for t in tasks]
+            status = "启用" if result else "暂停"
+            return f"✅ 任务已{status}", _format_task_list(tasks)
+        return "❌ 操作失败", ""
+
+    def run_scheduled_task_now(task_id):
+        scheduler = _get_scheduler()
+        if scheduler is None:
+            return "❌ 定时任务功能未启用"
+        if not task_id:
+            return "⚠️ 请先选择任务"
+        if scheduler.run_now(task_id):
+            return "🚀 任务已在后台执行，请刷新查看状态"
+        return "❌ 执行失败"
 
     # 事件绑定
     generate_btn.click(
@@ -1115,6 +1264,33 @@ with gr.Blocks(
         outputs=[douyin_download, status_text],
     )
 
+    # —— 定时任务事件绑定 ——
+    add_task_btn.click(
+        fn=add_scheduled_task,
+        inputs=[task_name_input, task_input_dir, task_output_dir, task_hour, task_minute, task_weekdays],
+        outputs=[task_status, task_dropdown, task_detail],
+    )
+    refresh_tasks_btn.click(
+        fn=refresh_scheduled_tasks,
+        inputs=[],
+        outputs=[task_dropdown, task_detail],
+    )
+    delete_task_btn.click(
+        fn=delete_scheduled_task,
+        inputs=[task_dropdown],
+        outputs=[task_status, task_dropdown, task_detail],
+    )
+    toggle_btn.click(
+        fn=toggle_scheduled_task,
+        inputs=[task_dropdown],
+        outputs=[task_status, task_detail],
+    )
+    run_now_btn.click(
+        fn=run_scheduled_task_now,
+        inputs=[task_dropdown],
+        outputs=[task_status],
+    )
+
     restore_btn.click(
         fn=restore_history,
         inputs=[history_dropdown, history_state],
@@ -1152,6 +1328,13 @@ if __name__ == "__main__":
     print("🚀 启动 Content Agent Web UI...")
     print(f"📎 打开浏览器访问: http://127.0.0.1:{free_port}")
     print("📡 按 Ctrl+C 停止服务\n")
+
+    # 启动定时任务调度器
+    try:
+        _get_scheduler()
+    except Exception as e:
+        print(f"[定时任务] 后台调度器启动失败: {e}")
+        print("[定时任务] 提示: 运行 `pip install schedule` 可启用定时任务功能\n")
 
     demo.launch(
         server_name="0.0.0.0",
