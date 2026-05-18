@@ -1009,6 +1009,51 @@ with gr.Blocks(
                                 toggle_btn = gr.Button("⏸️ 启用/暂停")
                                 delete_task_btn = gr.Button("🗑️ 删除", variant="stop")
 
+                with gr.TabItem("📅 内容日历"):
+                    gr.Markdown("### 📅 内容发布计划")
+                    gr.Markdown("管理内容发布排期，跟踪状态。")
+
+                    with gr.Row():
+                        with gr.Column(scale=1):
+                            gr.Markdown("#### 添加/编辑计划")
+                            cal_id_hidden = gr.Textbox(visible=False, value="")
+                            cal_title = gr.Textbox(label="标题", placeholder="例如：MCP协议介绍", value="")
+                            cal_topic = gr.Textbox(label="主题/关键词", placeholder="例如：MCP, AI工具", value="")
+                            cal_platforms = gr.CheckboxGroup(
+                                label="平台",
+                                choices=["小红书", "公众号", "抖音"],
+                                value=["小红书"],
+                            )
+                            cal_date = gr.Textbox(
+                                label="排期日期",
+                                placeholder="2026-05-20",
+                                value=datetime.now().strftime("%Y-%m-%d"),
+                            )
+                            cal_note_file = gr.Textbox(label="关联笔记文件", placeholder="notes/mcp_intro.md", value="")
+                            cal_status = gr.Dropdown(
+                                label="状态",
+                                choices=["草稿", "已排期", "已生成", "已发布"],
+                                value="草稿",
+                            )
+                            with gr.Row():
+                                cal_add_btn = gr.Button("➕ 添加", variant="primary")
+                                cal_update_btn = gr.Button("💾 更新", variant="secondary")
+                                cal_clear_btn = gr.Button("🔄 清空", variant="secondary")
+                            cal_status_msg = gr.Textbox(label="状态", value="等待操作...", interactive=False)
+
+                        with gr.Column(scale=1):
+                            gr.Markdown("#### 计划列表")
+                            cal_filter = gr.Dropdown(
+                                label="筛选",
+                                choices=["全部", "本周", "本月", "草稿", "已排期", "已生成", "已发布"],
+                                value="全部",
+                            )
+                            cal_dropdown = gr.Dropdown(label="选择计划", choices=[], value=None)
+                            cal_detail = gr.Markdown("点击刷新查看计划列表")
+                            with gr.Row():
+                                cal_refresh_btn = gr.Button("🔄 刷新")
+                                cal_delete_btn = gr.Button("🗑️ 删除", variant="stop")
+
             with gr.Group():
                 gr.Markdown("### 🏷️ 推荐标签/话题")
                 tags_output = gr.Textbox(
@@ -1159,6 +1204,132 @@ with gr.Blocks(
             return "🚀 任务已在后台执行，请刷新查看状态"
         return "❌ 执行失败"
 
+    # ==================== 内容日历处理函数 ====================
+
+    def _get_calendar():
+        """获取日历单例"""
+        try:
+            from content_agent.calendar import ContentCalendar
+            return ContentCalendar()
+        except Exception as e:
+            print(f"[内容日历] 初始化失败: {e}")
+            return None
+
+    def _format_calendar_list(entries: list[dict]) -> str:
+        if not entries:
+            return "**暂无发布计划**"
+        lines = [
+            "| 日期 | 标题 | 平台 | 状态 | 笔记 | 创建时间 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for e in entries:
+            platforms = "、".join(e.get("platforms", []))
+            status = e.get("status_display", e.get("status", ""))
+            note = e.get("note_file", "") or "无"
+            created = e.get("created_at", "")[:10]
+            lines.append(
+                f"| {e['scheduled_date']} | {e['title']} | {platforms} | {status} | {note} | {created} |"
+            )
+        return "\n".join(lines)
+
+    def refresh_calendar_entries(filter_type):
+        cal = _get_calendar()
+        if cal is None:
+            return gr.Dropdown(), "**内容日历初始化失败**"
+
+        from datetime import datetime, timedelta
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        if filter_type == "全部":
+            entries = cal.list_entries()
+        elif filter_type == "本周":
+            start = datetime.now().strftime("%Y-%m-%d")
+            end = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d")
+            entries = cal.list_entries(filter_date_from=start, filter_date_to=end)
+        elif filter_type == "本月":
+            start = datetime.now().strftime("%Y-%m-01")
+            end = (datetime.now().replace(day=28) + timedelta(days=4)).strftime("%Y-%m-01")
+            entries = cal.list_entries(filter_date_from=start, filter_date_to=end)
+        else:
+            entries = cal.list_entries(filter_status=filter_type)
+
+        choices = [(f"{e['scheduled_date']} | {e['title']}", e["id"]) for e in entries]
+        return gr.Dropdown(choices=choices, value=None), _format_calendar_list(entries)
+
+    def add_calendar_entry(title, topic, platforms, scheduled_date, note_file, status):
+        cal = _get_calendar()
+        if cal is None:
+            return "❌ 日历初始化失败", gr.Dropdown(), "", ""
+        try:
+            entry_id = cal.add(title, topic, platforms, scheduled_date, note_file, status)
+            entries = cal.list_entries()
+            choices = [(f"{e['scheduled_date']} | {e['title']}", e["id"]) for e in entries]
+            return (
+                f"✅ 计划已添加: {title}",
+                gr.Dropdown(choices=choices, value=entry_id),
+                _format_calendar_list(entries),
+                "",
+            )
+        except Exception as e:
+            return f"❌ 添加失败: {e}", gr.Dropdown(), "", ""
+
+    def delete_calendar_entry(entry_id):
+        cal = _get_calendar()
+        if cal is None:
+            return "❌ 日历初始化失败", gr.Dropdown(), ""
+        if not entry_id:
+            return "⚠️ 请先选择计划", gr.Dropdown(), ""
+        if cal.delete(entry_id):
+            entries = cal.list_entries()
+            choices = [(f"{e['scheduled_date']} | {e['title']}", e["id"]) for e in entries]
+            return "✅ 计划已删除", gr.Dropdown(choices=choices, value=None), _format_calendar_list(entries)
+        return "❌ 删除失败", gr.Dropdown(), ""
+
+    def load_calendar_entry_for_edit(entry_id):
+        cal = _get_calendar()
+        if cal is None or not entry_id:
+            return "", "", "", [], "", "", "草稿"
+        e = cal.get_entry(entry_id)
+        if not e:
+            return "", "", "", [], "", "", "草稿"
+        return (
+            e["id"],
+            e["title"],
+            e["topic"],
+            e.get("platforms", []),
+            e["scheduled_date"],
+            e["note_file"],
+            e.get("status_display", "草稿"),
+        )
+
+    def update_calendar_entry(entry_id, title, topic, platforms, scheduled_date, note_file, status):
+        cal = _get_calendar()
+        if cal is None:
+            return "❌ 日历初始化失败", ""
+        if not entry_id:
+            return "⚠️ 请先选择计划或加载", ""
+        try:
+            cal.update(
+                entry_id,
+                title=title,
+                topic=topic,
+                platforms=platforms,
+                scheduled_date=scheduled_date,
+                note_file=note_file,
+                status=status,
+            )
+            entries = cal.list_entries()
+            choices = [(f"{e['scheduled_date']} | {e['title']}", e["id"]) for e in entries]
+            return (
+                f"✅ 计划已更新: {title}",
+                _format_calendar_list(entries),
+            )
+        except Exception as e:
+            return f"❌ 更新失败: {e}", ""
+
+    def clear_calendar_form():
+        return "", "", "", [], datetime.now().strftime("%Y-%m-%d"), "", "草稿", "表单已清空"
+
     # 事件绑定
     generate_btn.click(
         fn=generate_content,
@@ -1289,6 +1460,38 @@ with gr.Blocks(
         fn=run_scheduled_task_now,
         inputs=[task_dropdown],
         outputs=[task_status],
+    )
+
+    # —— 内容日历事件绑定 ——
+    cal_add_btn.click(
+        fn=add_calendar_entry,
+        inputs=[cal_title, cal_topic, cal_platforms, cal_date, cal_note_file, cal_status],
+        outputs=[cal_status_msg, cal_dropdown, cal_detail, cal_id_hidden],
+    )
+    cal_refresh_btn.click(
+        fn=refresh_calendar_entries,
+        inputs=[cal_filter],
+        outputs=[cal_dropdown, cal_detail],
+    )
+    cal_delete_btn.click(
+        fn=delete_calendar_entry,
+        inputs=[cal_dropdown],
+        outputs=[cal_status_msg, cal_dropdown, cal_detail],
+    )
+    cal_dropdown.change(
+        fn=load_calendar_entry_for_edit,
+        inputs=[cal_dropdown],
+        outputs=[cal_id_hidden, cal_title, cal_topic, cal_platforms, cal_date, cal_note_file, cal_status],
+    )
+    cal_update_btn.click(
+        fn=update_calendar_entry,
+        inputs=[cal_id_hidden, cal_title, cal_topic, cal_platforms, cal_date, cal_note_file, cal_status],
+        outputs=[cal_status_msg, cal_detail],
+    )
+    cal_clear_btn.click(
+        fn=clear_calendar_form,
+        inputs=[],
+        outputs=[cal_id_hidden, cal_title, cal_topic, cal_platforms, cal_date, cal_note_file, cal_status, cal_status_msg],
     )
 
     restore_btn.click(
