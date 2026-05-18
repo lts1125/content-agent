@@ -725,6 +725,55 @@ def export_word(platform: str, content: str):
     return gr.update(value=path, visible=True), f"✅ {platform} Word 已就绪，点击下载"
 
 
+# ==================== 发布功能 ====================
+
+def publish_to_wechat(
+    gongzhonghao_text: str,
+    title: str,
+    author: str,
+    digest: str,
+    cover_file,
+    cover_url: str,
+):
+    """发布公众号文案到微信草稿箱"""
+    from content_agent.publisher import publish_wechat_draft, save_content_as_markdown
+
+    if not gongzhonghao_text or gongzhonghao_text.startswith("（未选择此平台）"):
+        return "❌ 公众号文案为空，请先生成文案"
+
+    # 确定封面路径
+    cover_path = ""
+    if cover_file:
+        # Gradio File 组件返回临时文件路径
+        if isinstance(cover_file, str):
+            cover_path = cover_file
+        elif hasattr(cover_file, "name"):
+            cover_path = cover_file.name
+    if not cover_path and cover_url and cover_url.strip():
+        cover_path = cover_url.strip()
+
+    if not cover_path:
+        return "❌ 微信草稿要求必须有封面图片，请上传封面或填入图片 URL"
+
+    # 保存 Markdown
+    article_title = title.strip() or "未命名文章"
+    md_path = save_content_as_markdown(article_title, gongzhonghao_text)
+
+    # 调用 kuaifa
+    result = publish_wechat_draft(
+        markdown_path=md_path,
+        title=article_title,
+        cover_path=cover_path,
+        author=author.strip(),
+        digest=digest.strip(),
+    )
+
+    msg = result["message"]
+    if result["details"]:
+        msg += f"\n\n详情:\n{result['details']}"
+    return msg
+
+
 # ==================== Gradio 界面 ====================
 
 with gr.Blocks(
@@ -959,6 +1008,44 @@ with gr.Blocks(
                         export_md_gzh_btn = gr.Button("📥 导出 Markdown", size="sm")
                         export_docx_gzh_btn = gr.Button("📄 导出 Word", size="sm")
                     gongzhonghao_download = gr.File(label="下载文件", visible=False)
+
+                    # 发布到微信公众号草稿箱
+                    with gr.Accordion("📤 发布到公众号草稿箱（需安装 kuaifa CLI）", open=False):
+                        publish_title = gr.Textbox(
+                            label="文章标题",
+                            placeholder="留空则使用默认标题",
+                            lines=1,
+                        )
+                        publish_author = gr.Textbox(
+                            label="作者名（可选）",
+                            placeholder="作者名",
+                            lines=1,
+                        )
+                        publish_digest = gr.Textbox(
+                            label="文章摘要（可选）",
+                            placeholder="摘要会显示在公众号列表中",
+                            lines=2,
+                        )
+                        gr.Markdown("**封面图片**（必填：微信草稿要求必须有封面）")
+                        cover_upload = gr.File(
+                            label="上传封面图片",
+                            file_types=["image"],
+                            type="filepath",
+                        )
+                        cover_url = gr.Textbox(
+                            label="或填入图片 URL",
+                            placeholder="https://example.com/cover.jpg",
+                            lines=1,
+                        )
+                        publish_wechat_btn = gr.Button(
+                            "📤 一键发布到草稿箱",
+                            variant="primary",
+                        )
+                        publish_result = gr.Textbox(
+                            label="发布结果",
+                            lines=4,
+                            interactive=False,
+                        )
 
                 with gr.TabItem("🎥 抖音"):
                     douyin_output = gr.Textbox(
@@ -1422,6 +1509,20 @@ with gr.Blocks(
         fn=lambda text: export_word("公众号", text),
         inputs=[gongzhonghao_output],
         outputs=[gongzhonghao_download, status_text],
+    )
+
+    # —— 公众号发布绑定 ——
+    publish_wechat_btn.click(
+        fn=publish_to_wechat,
+        inputs=[
+            gongzhonghao_output,
+            publish_title,
+            publish_author,
+            publish_digest,
+            cover_upload,
+            cover_url,
+        ],
+        outputs=[publish_result],
     )
 
     export_md_dy_btn.click(
