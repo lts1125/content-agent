@@ -10,20 +10,24 @@
 
 输入一段技术学习笔记，Agent 自动输出：
 
-| 平台 | 风格 | 字数 | 配图 |
-|------|------|------|------|
-| 小红书 | emoji 要点化、轻松口语 | 300-600 | ✅ 自动生成 HTML 卡片 |
-| 公众号 | 深度长文、代码块、章节完整 | 1500-2500 | ❌ |
-| 抖音 | 口播脚本、开头钩子、画面提示 | 200-400 | ❌ |
+| 平台 | 风格 | 字数 | 配图 | 标签 |
+|------|------|------|------|------|
+| 小红书 | emoji 要点化、轻松口语 | 300-600 | ✅ HTML 卡片预览 | ✅ 自动推荐 |
+| 公众号 | 深度长文、代码块、章节完整 | 1500-2500 | ❌ | ✅ |
+| 抖音 | 口播脚本、开头钩子、画面提示 | 200-400 | ❌ | ✅ |
+
+附带：标题 A/B 测试、配图 Prompt 生成、敏感词预检、一键导出 Markdown/Word。
 
 ---
 
 ## 技术栈
 
-- **Agent 框架**: [PydanticAI](https://github.com/pydantic/pydantic-ai) —— 类型安全、轻量、对后端开发者友好
+- **Agent 框架**: [PydanticAI](https://github.com/pydantic/pydantic-ai) — 类型安全、轻量、对后端开发者友好
 - **LLM**: 多 Provider 支持（DeepSeek / Kimi / MiniMax / OpenAI / 自定义）
+- **Web UI**: Gradio — 简洁的可视化界面
+- **输出**: Markdown + Word(.docx) + HTML 配图卡片
+- **打包**: PyInstaller — macOS 单文件桌面端应用
 - **语言**: Python 3.9+
-- **输出**: Markdown + HTML 配图卡片
 
 ---
 
@@ -41,7 +45,7 @@ cd content-agent
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install pydantic-ai python-dotenv
+pip install pydantic-ai python-dotenv python-docx
 
 # 如果需要 Web UI，额外安装：
 pip install gradio
@@ -139,12 +143,21 @@ python web_ui.py
 然后打开浏览器访问 `http://127.0.0.1:7860`。
 
 **界面功能：**
-- 粘贴或上传笔记文件
+- 粘贴或上传笔记文件（支持批量多篇，`———` 分隔）
 - 多选平台（小红书/公众号/抖音）
-- 开关搜索增强
-- 实时显示生成进度
-- 文案支持一键复制
-- 三个 Tab 分别展示三平台结果
+- 4 种风格切换（专业干货 / 轻松口语 / 情绪共鸣 / 悬忶钩子）
+- 搜索增强开关（DuckDuckGo / Tavily）
+- 实时生成进度条
+- 小红书 HTML 卡片实时预览
+- 标签/话题推荐（可直接复制使用）
+- 一键复制文案
+- 一键导出 Markdown / Word
+- 标题 A/B 测试（为每个平台生成 3 个备选标题）
+- 配图 Prompt 生成（可复制到 Midjourney/通义万相/即梦）
+- 敏感词预检（生成前自动检测，状态栏提示）
+- 历史记录恢复（最近 10 条）
+- 再改一版（输入修改指令重新生成）
+- 模型配置（页面内直接填写 API Key）
 
 ---
 
@@ -156,17 +169,38 @@ python web_ui.py
 ├── web_ui.py                    # Web UI 入口（Gradio）
 ├── content_agent/
 │   ├── __init__.py
-│   ├── agent_core.py            # Agent 核心
+│   ├── agent_core.py            # Agent 核心（多 Provider 配置、三平台输出、标签推荐）
 │   ├── html_renderer.py         # 小红书 HTML 配图卡片
-│   ├── quality_checker.py       # 混合质量检查
-│   └── research.py              # 搜索增强
-├── notes/                       # 存放输入笔记和开发记录
+│   ├── quality_checker.py       # 混合质量检查（规则 + LLM 评分 + 重试）
+│   ├── research.py              # 搜索增强（DuckDuckGo / Tavily）
+│   ├── docx_exporter.py         # Word 文档导出（字体、排版、列表）
+│   └── sensitive_checker.py     # 敏感词预检（本地词表 + 可选百度API）
+├── scripts/
+│   ├── build_app.py             # PyInstaller 打包脚本（macOS 桌面端）
+│   ├── test_app.py              # 打包后验证脚本
+│   └── test_app_v2.py           # 打包验证脚本 v2
+├── notes/                       # 开发笔记
 ├── .env                         # API Key 配置（gitignore）
 ├── .env.example                 # 配置模板
 ├── .gitignore
 ├── README.md
 └── output/                      # 生成的文案（按日期子目录）
 ```
+
+---
+
+## 打包为桌面端应用（可选）
+
+如果想分发给不会用命令行的朋友，可以用 PyInstaller 打包成单文件 `.app`：
+
+```bash
+pip install pyinstaller
+python scripts/build_app.py
+```
+
+打包完成后在 `dist/ContentAgent.app` 找到应用，双击即可运行，无需终端。
+
+> 当前只在 macOS 上测试过，Windows/Linux 需要小调配置。
 
 ---
 
@@ -193,6 +227,7 @@ python main.py -i notes/你的笔记.md
 
 ## Roadmap
 
+### P1 — 核心功能（已完成）
 - [x] 小红书单平台输出
 - [x] 三平台同时输出（小红书 / 公众号 / 抖音）
 - [x] 自动保存为 Markdown
@@ -204,6 +239,18 @@ python main.py -i notes/你的笔记.md
 - [x] 搜索增强（DuckDuckGo / Tavily）
 - [x] 批量处理多篇笔记
 - [x] Web UI（Gradio）
+- [x] 风格切换（专业 / 轻松 / 情绪 / 悬忶）
+- [x] 标签/话题推荐
+- [x] 敏感词预检
+- [x] 标题 A/B 测试
+- [x] 配图 Prompt 生成
+- [x] 一键导出 Word
+- [x] PyInstaller 打包桌面端
+
+### P2 — 工作流整合（规划中）
+- [ ] 定时任务 / Cron 调度
+- [ ] 内容日历管理
+- [ ] 自动发布到各平台
 
 ---
 
