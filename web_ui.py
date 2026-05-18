@@ -274,6 +274,36 @@ def verify_kuaifa_config() -> str:
         return f"❌ 验证异常: {e}"
 
 
+def get_kuaifa_setup_status() -> str:
+    """检测 kuaifa 安装及配置状态，返回状态提示"""
+    import shutil
+    import subprocess
+
+    # 1. 检查 kuaifa CLI 是否安装
+    if not shutil.which("kuaifa"):
+        return (
+            "❌ kuaifa 未安装\n"
+            "请先在终端运行：\n"
+            "  npm install -g kuaifa\n"
+            "完成后再填写下方配置。"
+        )
+
+    # 2. 检查是否已配置
+    cfg = load_kuaifa_config()
+    missing = []
+    if not cfg.get("appid"):
+        missing.append("微信 AppID")
+    if not cfg.get("appsecret"):
+        missing.append("微信 AppSecret")
+    if not cfg.get("api-key"):
+        missing.append("kuaifa API Key")
+
+    if missing:
+        return f"⚠️ kuaifa 已安装，但缺少配置：{', '.join(missing)}"
+
+    return "✅ kuaifa 已安装且配置完整，可以发布到公众号草稿箱"
+
+
 def _scale_html(html: str, scale: float = 0.48) -> str:
     """将 HTML 中所有 px 值按比例缩放，用于预览适配容器宽度"""
     def replace_px(match):
@@ -980,7 +1010,7 @@ with gr.Blocks(
                 kf_cfg = load_kuaifa_config()
                 kuaifa_status = gr.Textbox(
                     label="状态",
-                    value="已加载配置" if kf_cfg else "未配置，请填写下方信息",
+                    value=get_kuaifa_setup_status(),
                     interactive=False,
                 )
                 kuaifa_appid = gr.Textbox(

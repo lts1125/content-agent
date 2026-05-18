@@ -16,7 +16,7 @@
 | 公众号 | 深度长文、代码块、章节完整 | 1500-2500 | ❌ | ✅ |
 | 抖音 | 口播脚本、开头钩子、画面提示 | 200-400 | ❌ | ✅ |
 
-附带：标题 A/B 测试、配图 Prompt 生成、敏感词预检、一键导出 Markdown/Word。
+|附带：标题 A/B 测试、配图 Prompt 生成、敏感词预检、一键导出 Markdown/Word、定时任务、内容日历、公众号一键发布。
 
 ---
 
@@ -157,6 +157,10 @@ python web_ui.py
 - 敏感词预检（生成前自动检测，状态栏提示）
 - 历史记录恢复（最近 10 条）
 - 再改一版（输入修改指令重新生成）
+- **定时任务**（Cron 风格调度，自动生成文案）
+- **内容日历**（发布计划管理，状态跟踪：草稿 → 已排期 → 已生成 → 已发布）
+- **公众号一键发布到草稿箱**（通过 kuaifa CLI，支持封面、摘要、作者）
+- **kuaifa 发布配置**（Web UI 内直接配置 AppID / AppSecret / API Key）
 - 模型配置（页面内直接填写 API Key）
 
 ---
@@ -174,7 +178,9 @@ python web_ui.py
 │   ├── quality_checker.py       # 混合质量检查（规则 + LLM 评分 + 重试）
 │   ├── research.py              # 搜索增强（DuckDuckGo / Tavily）
 │   ├── docx_exporter.py         # Word 文档导出（字体、排版、列表）
-│   └── sensitive_checker.py     # 敏感词预检（本地词表 + 可选百度API）
+│   ├── sensitive_checker.py     # 敏感词预检（本地词表 + 可选百度API）
+│   ├── calendar.py              # 内容日历管理（发布计划、状态跟踪）
+│   └── publisher.py             # 多平台发布（当前支持微信公众号草稿箱）
 ├── scripts/
 │   ├── build_app.py             # PyInstaller 打包脚本（macOS 桌面端）
 │   ├── test_app.py              # 打包后验证脚本
@@ -198,7 +204,15 @@ pip install pyinstaller
 python scripts/build_app.py
 ```
 
-打包完成后在 `dist/ContentAgent.app` 找到应用，双击即可运行，无需终端。
+|打包完成后在 `dist/ContentAgent.app` 找到应用，双击即可运行，无需终端。
+
+> **注意：公众号发布功能依赖外部 kuaifa CLI**
+> 
+> 打包后的 `.app` 不包含 kuaifa，因为它是 Node.js/npm 工具。如需使用公众号发布功能，需要在目标机器上单独安装：
+> ```bash
+> npm install -g kuaifa
+> ```
+> 然后在 Web UI 的「发布配置」面板中填写微信 AppID、AppSecret 和 kuaifa API Key。
 
 > 当前只在 macOS 上测试过，Windows/Linux 需要小调配置。
 
@@ -247,10 +261,10 @@ python main.py -i notes/你的笔记.md
 - [x] 一键导出 Word
 - [x] PyInstaller 打包桌面端
 
-### P2 — 工作流整合（规划中）
-- [ ] 定时任务 / Cron 调度
-- [ ] 内容日历管理
-- [ ] 自动发布到各平台
+### P2 — 工作流整合（已完成）
+- [x] 定时任务 / Cron 调度
+- [x] 内容日历管理
+- [x] 微信公众号一键发布到草稿箱（通过 kuaifa CLI）
 
 ---
 
