@@ -162,6 +162,19 @@ def process_single_note(
             keywords=keywords,
         )
 
+    # 敏感词预检
+    try:
+        from content_agent.sensitive_checker import SensitiveChecker
+        sc = SensitiveChecker()
+        check_res = sc.check(raw_notes)
+        if check_res["has_sensitive"]:
+            hits = [h["word"] for h in check_res["hits"][:5]]
+            print(f"   ⚠️ 敏感词预检: 检测到 {check_res['local_count']} 个敏感/违规词: {', '.join(hits)}")
+            if len(check_res["hits"]) > 5:
+                print(f"      等共 {len(check_res['hits'])} 个")
+    except Exception:
+        pass
+
     # 生成内容 + 质量检查 + 重试
     generation_result = None
     for attempt in range(1, 4):
@@ -214,6 +227,13 @@ def process_single_note(
         saved.append(f)
 
     print(f"   ✅ 已保存 {len(saved)} 个文件")
+
+    # 打印推荐标签
+    if generation_result and generation_result.recommended_tags:
+        print(f"\n   🏷️ 推荐标签/\u8bdd\u9898:")
+        for line in generation_result.recommended_tags.strip().split("\n"):
+            if line.strip():
+                print(f"      {line.strip()}")
 
     # 生成小红书配图
     if "xiaohongshu" in enabled_platforms:

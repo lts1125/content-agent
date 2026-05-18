@@ -8,3 +8,8 @@ output/
 *.html
 !content_agent/**/*.html
 
+# PyInstaller
+build/
+dist/
+*.spec
+

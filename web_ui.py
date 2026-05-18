@@ -17,7 +17,19 @@ import os
 import re
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
+
+# 保护：打包后 windowed 模式下可能没有 stdout/stderr，重定向到 devnull 避免库报错
+if sys.platform == "darwin" and getattr(sys, "frozen", False):
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
+# 确保 urllib 访问 localhost 时不走代理（Gradio 启动检查需要）
+os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
+os.environ.setdefault("no_proxy", "127.0.0.1,localhost")
 
 from dotenv import load_dotenv
 
@@ -35,6 +47,172 @@ from content_agent.agent_core import ContentAgent
 from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
 from content_agent.html_renderer import XiaohongshuRenderer
+
+
+# ==================== 配置管理 ====================
+
+# 检测是否在 PyInstaller 打包环境中运行
+_IS_FROZEN = getattr(sys, "frozen", False)
+
+if _IS_FROZEN:
+    # 打包后：配置文件放在用户家目录下，确保可写
+    _APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "ContentAgent"
+    _APP_SUPPORT_DIR.mkdir(parents=True, exist_ok=True)
+    ENV_PATH = _APP_SUPPORT_DIR / ".env"
+else:
+    # 开发时：放在项目根目录
+    ENV_PATH = Path(__file__).parent / ".env"
+
+PROVIDER_KEY_MAP = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "kimi": "KIMI_API_KEY",
+    "minimax": "MINIMAX_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "custom": "MODEL_API_KEY",
+}
+
+
+def _read_env_file() -> dict:
+    """读取 .env 文件内容，返回 key->value 字典"""
+    env = {}
+    if ENV_PATH.exists():
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    return env
+
+
+def _ensure_default_env():
+    """打包后首次启动，如果 .env 不存在则创建默认模板"""
+    if not ENV_PATH.exists():
+        default_content = """# Content Agent - 环境变量配置
+# 此文件由 Web UI 自动生成
+
+MODEL_PROVIDER=deepseek
+
+# 请在下方填入你的 API Key（通过 Web UI 页面配置也可以）
+DEEPSEEK_API_KEY=
+
+# Tavily 搜索增强（可选）
+# TAVILY_API_KEY=
+"""
+        with open(ENV_PATH, "w", encoding="utf-8") as f:
+            f.write(default_content)
+
+
+def _write_env_file(env: dict):
+    """将配置字典写回 .env 文件（保留注释和格式）"""
+    _ensure_default_env()
+    lines = []
+
+    if ENV_PATH.exists():
+        with open(ENV_PATH, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    else:
+        lines = ["# Content Agent - 环境变量配置\n", "# 此文件由 Web UI 自动生成\n\n"]
+
+    # 更新已有行
+    written_keys = set()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" in stripped:
+            k = stripped.split("=", 1)[0].strip()
+            if k in env:
+                lines[i] = f"{k}={env[k]}\n"
+                written_keys.add(k)
+
+    # 追加新 key
+    for k, v in env.items():
+        if k not in written_keys:
+            lines.append(f"{k}={v}\n")
+
+    with open(ENV_PATH, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+
+    # 同时更新当前进程环境变量，立即生效
+    for k, v in env.items():
+        os.environ[k] = v
+
+
+def get_config_status():
+    """检查当前配置是否可用，返回 (是否可用, 提示信息)"""
+    provider = os.getenv("MODEL_PROVIDER", "deepseek")
+    key_var = PROVIDER_KEY_MAP.get(provider, "MODEL_API_KEY")
+    api_key = os.getenv(key_var, "")
+
+    if not api_key or len(api_key) < 10:
+        return False, f"⚠️ 未配置 {key_var}，请先在下方完成模型配置并保存"
+
+    # 自定义平台额外检查
+    if provider == "custom":
+        base_url = os.getenv("MODEL_BASE_URL", "")
+        model_name = os.getenv("MODEL_NAME", "")
+        if not base_url:
+            return False, "⚠️ 自定义平台未配置 MODEL_BASE_URL"
+        if not model_name:
+            return False, "⚠️ 自定义平台未配置 MODEL_NAME"
+
+    masked = api_key[:8] + "***" if len(api_key) > 8 else "***"
+    return True, f"✅ 当前 Provider: {provider} | Key: {masked}"
+
+
+def load_config_for_ui():
+    """加载当前配置，用于填充 UI 表单"""
+    env = _read_env_file()
+    provider = env.get("MODEL_PROVIDER", os.getenv("MODEL_PROVIDER", "deepseek"))
+    return {
+        "provider": provider,
+        "deepseek_key": env.get("DEEPSEEK_API_KEY", os.getenv("DEEPSEEK_API_KEY", "")),
+        "kimi_key": env.get("KIMI_API_KEY", os.getenv("KIMI_API_KEY", "")),
+        "minimax_key": env.get("MINIMAX_API_KEY", os.getenv("MINIMAX_API_KEY", "")),
+        "openai_key": env.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "")),
+        "custom_key": env.get("MODEL_API_KEY", os.getenv("MODEL_API_KEY", "")),
+        "custom_base_url": env.get("MODEL_BASE_URL", os.getenv("MODEL_BASE_URL", "")),
+        "custom_model_name": env.get("MODEL_NAME", os.getenv("MODEL_NAME", "")),
+        "tavily_key": env.get("TAVILY_API_KEY", os.getenv("TAVILY_API_KEY", "")),
+    }
+
+
+def save_config(provider, deepseek_key, kimi_key, minimax_key, openai_key,
+                custom_key, custom_base_url, custom_model_name, tavily_key=""):
+    """保存配置到 .env 文件"""
+    env = {"MODEL_PROVIDER": provider}
+
+    if provider == "deepseek" and deepseek_key.strip():
+        env["DEEPSEEK_API_KEY"] = deepseek_key.strip()
+    elif provider == "kimi" and kimi_key.strip():
+        env["KIMI_API_KEY"] = kimi_key.strip()
+    elif provider == "minimax" and minimax_key.strip():
+        env["MINIMAX_API_KEY"] = minimax_key.strip()
+    elif provider == "openai" and openai_key.strip():
+        env["OPENAI_API_KEY"] = openai_key.strip()
+    elif provider == "custom":
+        if custom_key.strip():
+            env["MODEL_API_KEY"] = custom_key.strip()
+        if custom_base_url.strip():
+            env["MODEL_BASE_URL"] = custom_base_url.strip()
+        if custom_model_name.strip():
+            env["MODEL_NAME"] = custom_model_name.strip()
+
+    if tavily_key.strip():
+        env["TAVILY_API_KEY"] = tavily_key.strip()
+
+    _write_env_file(env)
+
+    # 清除 Agent 缓存，下次调用会使用新配置
+    global _agent, _checker
+    _agent = None
+    _checker = None
+
+    ok, msg = get_config_status()
+    return msg
 
 
 def _scale_html(html: str, scale: float = 0.48) -> str:
@@ -68,25 +246,51 @@ def _get_checker():
     return _checker
 
 
-def generate_content(note_text, note_file, platforms, enable_research, search_engine, style, progress=gr.Progress()):
+def generate_content(note_text, note_file, platforms, enable_research, search_engine, style, batch_mode, history, progress=gr.Progress()):
     """
     Gradio 处理函数
 
     Returns:
-        (xiaohongshu, gongzhonghao, douyin, status_msg)
+        (xiaohongshu, gongzhonghao, douyin, xiaohongshu_html, tags, status, history, history_dropdown)
     """
+    # 检查配置
+    ok, config_msg = get_config_status()
+    if not ok:
+        yield "", "", "", "", "", config_msg, history, gr.Dropdown()
+        return
+
+    # 如果选了 Tavily，检查 Tavily Key
+    if search_engine == "tavily" and not os.getenv("TAVILY_API_KEY", "").strip():
+        yield (
+            "", "", "", "", "",
+            "⚠️ 使用 Tavily 搜索需要配置 TAVILY_API_KEY\n"
+            "请在页面顶部「⭐ 模型配置」中填写 Tavily API Key，或切换为 DuckDuckGo (免费无需 Key)",
+            history, gr.Dropdown()
+        )
+        return
+
     # 优先使用上传的文件
     if note_file is not None:
         try:
-            # note_file 是 tempfile 路径
             with open(note_file, "r", encoding="utf-8") as f:
                 note_text = f.read()
         except Exception as e:
-            return "", "", "", "", f"❌ 读取文件失败: {e}"
+            yield "", "", "", "", "", f"❌ 读取文件失败: {e}", history, gr.Dropdown()
+            return
 
     note_text = note_text.strip() if note_text else ""
     if not note_text:
-        return "", "", "", "", "⚠️ 请输入或上传笔记"
+        yield "", "", "", "", "", "⚠️ 请输入或上传笔记", history, gr.Dropdown()
+        return
+
+    # 敏感词预检
+    sensitive_check = None
+    try:
+        from content_agent.sensitive_checker import SensitiveChecker
+        checker = SensitiveChecker()
+        sensitive_check = checker.check(note_text)
+    except Exception:
+        pass
 
     # 解析平台
     platform_map = {
@@ -97,7 +301,18 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     enabled = {platform_map[p] for p in platforms if p in platform_map}
 
     if not enabled:
-        return "", "", "", "", "⚠️ 请至少选择一个平台"
+        yield "", "", "", "", "", "⚠️ 请至少选择一个平台", history, gr.Dropdown()
+        return
+
+    # 拆分多篇笔记
+    if batch_mode:
+        notes_list = [n.strip() for n in re.split(r'\n\s*---\s*\n', note_text) if n.strip()]
+    else:
+        notes_list = [note_text]
+
+    if not notes_list:
+        yield "", "", "", "", "", "⚠️ 未能解析出有效笔记", history, gr.Dropdown()
+        return
 
     # 风格指令
     style_instructions = {
@@ -108,88 +323,405 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     }
     style_note = style_instructions.get(style, "")
 
-    progress(0.1, desc="初始化 Agent...")
+    progress(0.05, desc="初始化 Agent...")
     agent = _get_agent()
     checker = _get_checker()
 
-    current_notes = note_text
+    # 立即反馈：让用户知道已经开始处理
+    yield "", "", "", "", "", "⏳ 正在初始化 Agent，请稍候...", history, gr.Dropdown()
 
-    # 搜索增强
-    if enable_research:
-        progress(0.2, desc="搜索增强中...")
-        try:
-            from pydantic_ai import Agent
-            keyword_agent = Agent(
-                agent.model,
-                system_prompt="你是一个关键词提取助手，从技术笔记中提取精准的搜索关键词。"
+    all_xiaohongshu = []
+    all_gongzhonghao = []
+    all_douyin = []
+    all_tags = []
+
+    for idx, single_note in enumerate(notes_list, 1):
+        base_progress = (idx - 1) / len(notes_list)
+        progress(base_progress, desc=f"处理第 {idx}/{len(notes_list)} 篇...")
+
+        current_notes = single_note
+
+        # 搜索增强
+        if enable_research:
+            progress(base_progress + 0.05, desc=f"笔记 {idx}: 搜索增强...")
+            try:
+                from pydantic_ai import Agent
+                keyword_agent = Agent(
+                    agent.model,
+                    system_prompt="你是一个关键词提取助手，从技术笔记中提取精准的搜索关键词。"
+                )
+                keywords = extract_keywords_with_llm(single_note, keyword_agent)
+                current_notes = research_notes(
+                    single_note,
+                    search_engine=search_engine,
+                    max_results=3,
+                    verbose=False,
+                    keywords=keywords,
+                )
+            except Exception as e:
+                print(f"笔记 {idx} 搜索增强失败: {e}")
+
+        styled_notes = current_notes + style_note if style_note else current_notes
+
+        # 生成 + 质检
+        progress(base_progress + 0.1, desc=f"笔记 {idx}: 生成中...")
+        generation_result = None
+
+        for attempt in range(1, 4):
+            try:
+                generation_result = agent.run(styled_notes)
+            except Exception as e:
+                generation_result = None
+                print(f"笔记 {idx} Agent 调用失败: {e}")
+                break
+
+            progress(base_progress + 0.1 + attempt * 0.05, desc=f"笔记 {idx}: 质检第 {attempt} 次...")
+
+            check = checker.check(
+                generation_result.xiaohongshu,
+                generation_result.gongzhonghao,
+                generation_result.douyin,
+                attempt=attempt,
             )
-            keywords = extract_keywords_with_llm(note_text, keyword_agent)
-            current_notes = research_notes(
-                note_text,
-                search_engine=search_engine,
-                max_results=3,
-                verbose=False,
-                keywords=keywords,
-            )
-        except Exception as e:
-            print(f"搜索增强失败: {e}")
 
-    # 笔记内容前追加风格指令
-    styled_notes = current_notes + style_note if style_note else current_notes
+            if check.passed:
+                break
 
-    # 生成 + 质检
-    progress(0.3, desc="生成中...")
-    generation_result = None
+            if attempt < 3:
+                styled_notes = (
+                    f"【请根据以下改进要求重新输出三平台文案】\n"
+                    f"{check.retry_suggestion}\n\n"
+                    f"--- 原始笔记 ---\n{single_note}"
+                )
 
-    for attempt in range(1, 4):
-        try:
-            generation_result = agent.run(styled_notes)
-        except Exception as e:
-            return "", "", "", "", f"❌ Agent 调用失败: {e}"
+        if generation_result is None:
+            xs = gh = dy = "❌ 生成失败"
+            tag = ""
+        else:
+            xs = generation_result.xiaohongshu if "xiaohongshu" in enabled else "（未选择此平台）"
+            gh = generation_result.gongzhonghao if "gongzhonghao" in enabled else "（未选择此平台）"
+            dy = generation_result.douyin if "douyin" in enabled else "（未选择此平台）"
+            tag = generation_result.recommended_tags or ""
 
-        progress(0.3 + attempt * 0.15, desc=f"质量检查第 {attempt} 次...")
+        all_tags.append(tag)
 
-        check = checker.check(
-            generation_result.xiaohongshu,
-            generation_result.gongzhonghao,
-            generation_result.douyin,
-            attempt=attempt,
-        )
+        if len(notes_list) > 1:
+            preview = single_note[:30] + "..." if len(single_note) > 30 else single_note
+            all_xiaohongshu.append(f"## 笔记 {idx}: {preview}\n\n{xs}")
+            all_gongzhonghao.append(f"## 笔记 {idx}: {preview}\n\n{gh}")
+            all_douyin.append(f"## 笔记 {idx}: {preview}\n\n{dy}")
+        else:
+            all_xiaohongshu.append(xs)
+            all_gongzhonghao.append(gh)
+            all_douyin.append(dy)
 
-        if check.passed:
-            break
+    # 合并结果
+    sep = "\n\n---\n\n" if len(notes_list) > 1 else "\n"
+    xiaohongshu_text = sep.join(all_xiaohongshu)
+    gongzhonghao_text = sep.join(all_gongzhonghao)
+    douyin_text = sep.join(all_douyin)
 
-        if attempt < 3:
-            current_notes = (
-                f"【请根据以下改进要求重新输出三平台文案】\n"
-                f"{check.retry_suggestion}\n\n"
-                f"--- 原始笔记 ---\n{note_text}"
-            )
+    # 推荐标签只取第一篇的
+    tags_text = all_tags[0] if all_tags else ""
 
-    progress(0.9, desc="整理结果...")
-
-    xiaohongshu_text = generation_result.xiaohongshu if "xiaohongshu" in enabled else "（未选择此平台）"
-    gongzhonghao_text = generation_result.gongzhonghao if "gongzhonghao" in enabled else "（未选择此平台）"
-    douyin_text = generation_result.douyin if "douyin" in enabled else "（未选择此平台）"
-
-    # 生成小红书 HTML 卡片预览
+    # HTML 预览只用第一篇
     xiaohongshu_html = ""
-    if "xiaohongshu" in enabled and xiaohongshu_text:
+    first_xs = all_xiaohongshu[0]
+    if "xiaohongshu" in enabled and first_xs and not first_xs.startswith("❌"):
+        # 提取第一篇的纯文案部分（去掉 ## 标题）
+        render_text = first_xs.split("\n\n", 1)[-1] if first_xs.startswith("## ") else first_xs
         try:
             renderer = XiaohongshuRenderer()
             with tempfile.TemporaryDirectory() as tmpdir:
-                html_path = renderer.render(xiaohongshu_text, tmpdir)
+                html_path = renderer.render(render_text, tmpdir)
                 with open(html_path, "r", encoding="utf-8") as f:
                     html_content = f.read()
-                # 缩小预览适配右栏宽度（0.48 约 432px）
                 xiaohongshu_html = _scale_html(html_content, scale=0.48)
         except Exception as e:
             print(f"HTML 预览生成失败: {e}")
 
-    status = f"✅ 生成完成！平台: {', '.join(platforms)} | 笔记: {len(note_text)} 字"
+    # 追加到历史记录
+    entry = {
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "note_preview": f"批量 {len(notes_list)} 篇" if len(notes_list) > 1 else note_text[:30] + "...",
+        "xiaohongshu": xiaohongshu_text,
+        "gongzhonghao": gongzhonghao_text,
+        "douyin": douyin_text,
+        "recommended_tags": tags_text,
+    }
+    history = [entry] + (history if history else [])[:9]
+
+    choices = [(f"{e['time']} | {e['note_preview']}", str(i)) for i, e in enumerate(history)]
+    history_dropdown = gr.Dropdown(choices=choices, value=None)
+
+    status = f"✅ 完成！共 {len(notes_list)} 篇 | 平台: {', '.join(platforms)} | 耗时请参考页面状态栏"
+    if sensitive_check and sensitive_check["has_sensitive"]:
+        hits = [h["word"] for h in sensitive_check["hits"][:5]]
+        warn = f"⚠️ 检测到{sensitive_check['local_count']}个敏感/违规词: {', '.join(hits)}"
+        if len(sensitive_check["hits"]) > 5:
+            warn += f" 等共{len(sensitive_check['hits'])}个"
+        status += f"\n{warn}"
+    progress(1.0, desc="完成")
+    yield xiaohongshu_text, gongzhonghao_text, douyin_text, xiaohongshu_html, tags_text, status, history, history_dropdown
+
+
+def refine_content(xiaohongshu, gongzhonghao, douyin, instruction, note_text, style, history, progress=gr.Progress()):
+    """根据修改指令，在当前文案基础上重新生成"""
+    instruction = instruction.strip() if instruction else ""
+    if not instruction:
+        return xiaohongshu, gongzhonghao, douyin, "", "", "⚠️ 请输入修改指令", history, gr.Dropdown()
+
+    progress(0.2, desc="准备优化...")
+    agent = _get_agent()
+
+    # 风格指令
+    style_instructions = {
+        "专业干货": "",
+        "轻松口语": "\n【风格要求：语气像朋友聊天，轻松自然，多用生活化比喻，少讲大道理】",
+        "情绪共鸣": "\n【风格要求：开头点出痛点让读者产生共鸣，语气有温度，适当表达焦虑和成就感】",
+        "悬念钩子": "\n【风格要求：开头埋悬念钩子，正文逐步揭秘，结尾反转或出人意料】",
+    }
+    style_note = style_instructions.get(style, "")
+
+    refine_prompt = f"""【请根据以下改进要求重新输出三平台文案】
+{instruction}
+
+--- 当前文案 ---
+小红书：
+{xiaohongshu}
+
+公众号：
+{gongzhonghao}
+
+抖音：
+{douyin}
+
+--- 原始笔记 ---
+{note_text}{style_note}"""
+
+    progress(0.5, desc="重新生成...")
+    try:
+        result = agent.run(refine_prompt)
+    except Exception as e:
+        return xiaohongshu, gongzhonghao, douyin, "", "", f"❌ 优化失败: {e}", history, gr.Dropdown()
+
+    progress(0.8, desc="整理结果...")
+
+    # 生成小红书 HTML 卡片预览
+    xiaohongshu_html = ""
+    if result.xiaohongshu:
+        try:
+            renderer = XiaohongshuRenderer()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                html_path = renderer.render(result.xiaohongshu, tmpdir)
+                with open(html_path, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                xiaohongshu_html = _scale_html(html_content, scale=0.48)
+        except Exception as e:
+            print(f"HTML 预览生成失败: {e}")
+
+    # 追加到历史记录
+    entry = {
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "note_preview": f"优化: {instruction[:20]}...",
+        "xiaohongshu": result.xiaohongshu,
+        "gongzhonghao": result.gongzhonghao,
+        "douyin": result.douyin,
+        "recommended_tags": result.recommended_tags or "",
+    }
+    history = [entry] + (history if history else [])[:9]
+
+    choices = [(f"{e['time']} | {e['note_preview']}", str(i)) for i, e in enumerate(history)]
+    history_dropdown = gr.Dropdown(choices=choices, value=None)
+
+    status = f"✅ 优化完成！指令: {instruction[:20]}..."
+    progress(1.0, desc="完成")
+    return result.xiaohongshu, result.gongzhonghao, result.douyin, xiaohongshu_html, result.recommended_tags or "", status, history, history_dropdown
+
+
+def restore_history(selected_index, history):
+    """从历史记录恢复文案到输出区"""
+    if not selected_index or not history:
+        return "", "", "", "", "", "⚠️ 请先选择历史记录"
+
+    try:
+        idx = int(selected_index)
+        entry = history[idx]
+    except (ValueError, IndexError):
+        return "", "", "", "", "", "❌ 无效的历史记录"
+
+    # 生成小红书 HTML 预览
+    xiaohongshu_html = ""
+    if entry.get("xiaohongshu") and entry["xiaohongshu"] != "（未选择此平台）":
+        try:
+            renderer = XiaohongshuRenderer()
+            with tempfile.TemporaryDirectory() as tmpdir:
+                html_path = renderer.render(entry["xiaohongshu"], tmpdir)
+                with open(html_path, "r", encoding="utf-8") as f:
+                    html_content = f.read()
+                xiaohongshu_html = _scale_html(html_content, scale=0.48)
+        except Exception as e:
+            print(f"HTML 预览生成失败: {e}")
+
+    status = f"✅ 已恢复 {entry['time']} 的文案"
+    return (
+        entry.get("xiaohongshu", ""),
+        entry.get("gongzhonghao", ""),
+        entry.get("douyin", ""),
+        xiaohongshu_html,
+        entry.get("recommended_tags", ""),
+        status,
+    )
+
+
+def generate_titles(xiaohongshu, gongzhonghao, douyin, note_text, style, progress=gr.Progress()):
+    """为当前三平台文案各生成 3 个备选标题"""
+    progress(0.2, desc="准备标题生成...")
+    agent = _get_agent()
+
+    from pydantic_ai import Agent as PydanticAgent
+
+    style_desc = {
+        "专业干货": "专业、权威、有信息量",
+        "轻松口语": "亲切、口语化、像朋友推荐",
+        "情绪共鸣": "戳痛点、引发共鸣、有情感冲击",
+        "悬念钩子": "制造悬念、引发好奇、想点击",
+    }.get(style, "吸引人点击")
+
+    title_agent = PydanticAgent(
+        agent.model,
+        system_prompt="你是一位爆款标题专家，擅长为不同平台的内容生成吸引人的标题。",
+    )
+
+    platform_map = {
+        "小红书": xiaohongshu,
+        "公众号": gongzhonghao,
+        "抖音": douyin,
+    }
+
+    results = {}
+    for idx, (platform, text) in enumerate(platform_map.items(), 1):
+        if not text or text == "（未选择此平台）":
+            results[platform] = "*未选择此平台*"
+            continue
+
+        progress(0.2 + idx * 0.2, desc=f"生成 {platform} 标题...")
+
+        prompt = f"""请为以下{platform}文案生成 3 个备选标题。
+
+要求：
+- 风格：{style_desc}
+- 吸引人点击，有信息量
+- 每个标题不超过 20 字
+- 标注每个标题的类型（如：数字型、疑问型、痛点型、悬念型、对比型）
+
+原始笔记摘要：
+{note_text[:500]}
+
+文案内容：
+{text[:800]}
+
+请严格按以下格式输出：
+1. 【标题】（类型：xxx）
+2. 【标题】（类型：xxx）
+3. 【标题】（类型：xxx）
+"""
+        try:
+            r = title_agent.run_sync(prompt)
+            results[platform] = r.output
+        except Exception as e:
+            results[platform] = f"生成失败: {e}"
 
     progress(1.0, desc="完成")
-    return xiaohongshu_text, gongzhonghao_text, douyin_text, xiaohongshu_html, status
+    return results["小红书"], results["公众号"], results["抖音"], "✅ 备选标题生成完成"
+
+
+def generate_cover_prompt(xiaohongshu, progress=gr.Progress()):
+    """根据小红书文案生成 AI 绘画 Prompt"""
+    if not xiaohongshu or xiaohongshu == "（未选择此平台）":
+        return "⚠️ 请先生成小红书文案", ""
+
+    progress(0.3, desc="准备配图 prompt...")
+    agent = _get_agent()
+
+    from pydantic_ai import Agent as PydanticAgent
+
+    cover_agent = PydanticAgent(
+        agent.model,
+        system_prompt="你是一位专业的 AI 绘画提示词工程师，擅长根据文案内容生成高质量的小红书封面图绘画 prompt。",
+    )
+
+    prompt = f"""请根据以下小红书文案，生成一个适合作为小红书封面图的 AI 绘画 prompt。
+
+要求：
+- 画面风格：清新、现代、适合科技/学习类内容，色彩明快
+- 构图：适合 3:4 竖版比例（小红书封面）
+- 不要包含文字或字符，纯图像
+- 提供中文画面描述和英文 Midjourney 风格 prompt
+- Midjourney prompt 需包含风格参数（如 --ar 3:4）
+
+文案内容：
+{xiaohongshu[:1200]}
+
+请严格按以下格式输出：
+【画面描述】
+（用一段话描述画面内容、色彩、氛围、构图）
+
+【Midjourney Prompt】
+（英文关键词组成的 prompt，结尾带 --ar 3:4 等参数）
+"""
+
+    try:
+        r = cover_agent.run_sync(prompt)
+        result = r.output.strip()
+    except Exception as e:
+        return f"生成失败: {e}", ""
+
+    progress(1.0, desc="完成")
+    return result, "✅ 配图 prompt 生成完成，可复制到 Midjourney/通义万相/即梦 等工具"
+
+
+# ==================== 导出功能 ====================
+
+def export_markdown(platform: str, content: str):
+    """导出指定平台文案为 Markdown 文件"""
+    if not content or content.startswith("（未选择此平台）") or content.startswith("❌"):
+        return gr.update(value=None, visible=False), f"⚠️ {platform} 无内容可导出"
+
+    fd, path = tempfile.mkstemp(suffix=f"_{platform}.md", text=True)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f"---\ntitle: {platform}文案\ndate: {datetime.now().isoformat()}\nplatform: {platform}\n---\n\n")
+        f.write(content)
+    return gr.update(value=path, visible=True), f"✅ {platform} Markdown 已就绪，点击下载"
+
+
+def export_word(platform: str, content: str):
+    """导出指定平台文案为精美排版的 Word 文件"""
+    if not content or content.startswith("（未选择此平台）") or content.startswith("❌"):
+        return gr.update(value=None, visible=False), f"⚠️ {platform} 无内容可导出"
+
+    try:
+        from content_agent.docx_exporter import render_markdown_to_docx
+    except ImportError as e:
+        return (
+            gr.update(value=None, visible=False),
+            f"⚠️ 导出模块加载失败: {e}",
+        )
+
+    try:
+        path = render_markdown_to_docx(content, title=f"{platform}文案")
+    except ImportError:
+        return (
+            gr.update(value=None, visible=False),
+            "⚠️ 未安装 python-docx，请运行: pip install python-docx",
+        )
+    except Exception as e:
+        return (
+            gr.update(value=None, visible=False),
+            f"❌ Word 生成失败: {e}",
+        )
+
+    return gr.update(value=path, visible=True), f"✅ {platform} Word 已就绪，点击下载"
 
 
 # ==================== Gradio 界面 ====================
@@ -202,6 +734,9 @@ with gr.Blocks(
     .copy-btn { margin-top: 8px; }
     """
 ) as demo:
+    # 会话级历史记录状态
+    history_state = gr.State([])
+
     gr.Markdown("""
     # 📘 Content Agent - AI 多平台内容改写
 
@@ -211,11 +746,131 @@ with gr.Blocks(
     with gr.Row():
         # 左侧：输入区
         with gr.Column(scale=1):
+            # ── 模型配置 ──
+            with gr.Accordion("⚙️ 模型配置（第一次使用请先填写）", open=False) as config_accordion:
+                config_status = gr.Textbox(
+                    label="状态",
+                    value=get_config_status()[1],
+                    interactive=False,
+                )
+
+                provider_select = gr.Dropdown(
+                    label="选择 Provider",
+                    choices=[
+                        ("DeepSeek (推荐，性价比最高)", "deepseek"),
+                        ("Kimi (月之暗面)", "kimi"),
+                        ("MiniMax", "minimax"),
+                        ("OpenAI / Azure", "openai"),
+                        ("自定义 OpenAI-compatible", "custom"),
+                    ],
+                    value=load_config_for_ui()["provider"],
+                )
+
+                # 各 Provider 的 Key 输入（password 隐藏）
+                deepseek_key_input = gr.Textbox(
+                    label="DeepSeek API Key",
+                    placeholder="sk-...",
+                    type="password",
+                    value=load_config_for_ui()["deepseek_key"],
+                    visible=load_config_for_ui()["provider"] == "deepseek",
+                )
+                kimi_key_input = gr.Textbox(
+                    label="Kimi API Key",
+                    placeholder="sk-...",
+                    type="password",
+                    value=load_config_for_ui()["kimi_key"],
+                    visible=load_config_for_ui()["provider"] == "kimi",
+                )
+                minimax_key_input = gr.Textbox(
+                    label="MiniMax API Key",
+                    placeholder="your-minimax-api-key",
+                    type="password",
+                    value=load_config_for_ui()["minimax_key"],
+                    visible=load_config_for_ui()["provider"] == "minimax",
+                )
+                openai_key_input = gr.Textbox(
+                    label="OpenAI API Key",
+                    placeholder="sk-...",
+                    type="password",
+                    value=load_config_for_ui()["openai_key"],
+                    visible=load_config_for_ui()["provider"] == "openai",
+                )
+
+                # 自定义平台扩展字段
+                with gr.Column(visible=load_config_for_ui()["provider"] == "custom") as custom_fields:
+                    custom_key_input = gr.Textbox(
+                        label="API Key",
+                        placeholder="sk-...",
+                        type="password",
+                        value=load_config_for_ui()["custom_key"],
+                    )
+                    custom_base_url_input = gr.Textbox(
+                        label="Base URL",
+                        placeholder="https://api.example.com/v1",
+                        value=load_config_for_ui()["custom_base_url"],
+                    )
+                    custom_model_name_input = gr.Textbox(
+                        label="Model Name",
+                        placeholder="deepseek-ai/DeepSeek-V3",
+                        value=load_config_for_ui()["custom_model_name"],
+                    )
+                    gr.Markdown("""
+                    常见平台参考：
+                    - 硅基流动: `https://api.siliconflow.cn/v1` + `deepseek-ai/DeepSeek-V3`
+                    - 通义千问: `https://dashscope.aliyuncs.com/compatible-mode/v1` + `qwen-plus`
+                    - 智谱: `https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash`
+                    - Ollama: `http://localhost:11434/v1` + `qwen2.5:7b`
+                    """)
+
+                # ── Tavily 搜索引擎 Key ──
+                gr.Markdown("---")
+                tavily_key_input = gr.Textbox(
+                    label="Tavily API Key（搜索增强用，可选）",
+                    placeholder="tvly-... （选填，用 Tavily 搜索时需要）",
+                    type="password",
+                    value=load_config_for_ui()["tavily_key"],
+                )
+                gr.Markdown("注册: [https://app.tavily.com/home](https://app.tavily.com/home) 免费 1000 credits/月")
+
+                save_config_btn = gr.Button("💾 保存配置", variant="primary", size="sm")
+
+            # ── Provider 切换时显示/隐藏对应的 Key 输入框 ──
+            def _toggle_provider_inputs(provider):
+                return {
+                    deepseek_key_input: gr.update(visible=provider == "deepseek"),
+                    kimi_key_input: gr.update(visible=provider == "kimi"),
+                    minimax_key_input: gr.update(visible=provider == "minimax"),
+                    openai_key_input: gr.update(visible=provider == "openai"),
+                    custom_fields: gr.update(visible=provider == "custom"),
+                }
+
+            provider_select.change(
+                fn=_toggle_provider_inputs,
+                inputs=[provider_select],
+                outputs=[deepseek_key_input, kimi_key_input, minimax_key_input, openai_key_input, custom_fields],
+            )
+
+            save_config_btn.click(
+                fn=save_config,
+                inputs=[
+                    provider_select,
+                    deepseek_key_input,
+                    kimi_key_input,
+                    minimax_key_input,
+                    openai_key_input,
+                    custom_key_input,
+                    custom_base_url_input,
+                    custom_model_name_input,
+                    tavily_key_input,
+                ],
+                outputs=[config_status],
+            )
+
             gr.Markdown("### 📝 输入")
 
             note_input = gr.Textbox(
-                label="笔记内容（支持 Markdown）",
-                placeholder="粘贴你的技术学习笔记...\n\n示例：\n背景：今天学了 xxx\n核心步骤：...",
+                label="笔记内容（支持 Markdown，多篇用 --- 分隔）",
+                placeholder="粘贴你的技术学习笔记...\n\n示例：\n背景：今天学了 xxx\n核心步骤：...\n\n---\n\n第二篇笔记...",
                 lines=12,
                 show_copy_button=False,
             )
@@ -254,6 +909,11 @@ with gr.Blocks(
                     value="专业干货",
                 )
 
+                batch_mode = gr.Checkbox(
+                    label="📤 批量模式（多篇笔记用 --- 分隔）",
+                    value=False,
+                )
+
             generate_btn = gr.Button("🚀 生成三平台文案", variant="primary", size="lg")
 
             status_text = gr.Textbox(
@@ -261,6 +921,15 @@ with gr.Blocks(
                 value="等待生成...",
                 interactive=False,
             )
+
+            with gr.Group():
+                gr.Markdown("### 📜 生成历史")
+                history_dropdown = gr.Dropdown(
+                    label="选择历史记录",
+                    choices=[],
+                    value=None,
+                )
+                restore_btn = gr.Button("🔄 恢复到输出区", variant="secondary", size="sm")
 
         # 右侧：输出区
         with gr.Column(scale=1):
@@ -274,6 +943,10 @@ with gr.Blocks(
                         show_copy_button=True,
                     )
                     xiaohongshu_preview = gr.HTML()
+                    with gr.Row():
+                        export_md_xhs_btn = gr.Button("📥 导出 Markdown", size="sm")
+                        export_docx_xhs_btn = gr.Button("📄 导出 Word", size="sm")
+                    xiaohongshu_download = gr.File(label="下载文件", visible=False)
 
                 with gr.TabItem("💬 公众号"):
                     gongzhonghao_output = gr.Textbox(
@@ -281,13 +954,61 @@ with gr.Blocks(
                         lines=18,
                         show_copy_button=True,
                     )
+                    with gr.Row():
+                        export_md_gzh_btn = gr.Button("📥 导出 Markdown", size="sm")
+                        export_docx_gzh_btn = gr.Button("📄 导出 Word", size="sm")
+                    gongzhonghao_download = gr.File(label="下载文件", visible=False)
 
-                with gr.TabItem("🎵 抖音"):
+                with gr.TabItem("🎥 抖音"):
                     douyin_output = gr.Textbox(
                         label="抖音文案",
                         lines=18,
                         show_copy_button=True,
                     )
+                    with gr.Row():
+                        export_md_dy_btn = gr.Button("📥 导出 Markdown", size="sm")
+                        export_docx_dy_btn = gr.Button("📄 导出 Word", size="sm")
+                    douyin_download = gr.File(label="下载文件", visible=False)
+
+            with gr.Group():
+                gr.Markdown("### 🏷️ 推荐标签/话题")
+                tags_output = gr.Textbox(
+                    label="生成的各平台推荐标签，可直接复制使用",
+                    lines=8,
+                    show_copy_button=True,
+                )
+
+            with gr.Group():
+                gr.Markdown("### ✏️ 不满意？再改一版")
+                refine_input = gr.Textbox(
+                    label="修改指令",
+                    placeholder="例如：更口语化 / 加个钩子 / 缩短一点 / 多加点 emoji / 语气更在地气",
+                    lines=2,
+                )
+                refine_btn = gr.Button("🔄 再改一版", variant="secondary")
+
+            with gr.Group():
+                gr.Markdown("### 🎲 标题 A/B 测试")
+                title_btn = gr.Button("🎩 生成备选标题", variant="secondary")
+                with gr.Row():
+                    with gr.Column():
+                        gr.Markdown("📱 小红书")
+                        xiaohongshu_titles = gr.Markdown("点击上方按钮生成")
+                    with gr.Column():
+                        gr.Markdown("💬 公众号")
+                        gongzhonghao_titles = gr.Markdown("点击上方按钮生成")
+                    with gr.Column():
+                        gr.Markdown("🎥 抖音")
+                        douyin_titles = gr.Markdown("点击上方按钮生成")
+
+            with gr.Group():
+                gr.Markdown("### 🎨 配图 Prompt 生成")
+                cover_prompt_btn = gr.Button("🖼️ 生成小红书封面配图 Prompt", variant="secondary")
+                cover_prompt_output = gr.Textbox(
+                    label="绘画 Prompt（可复制到 Midjourney/通义万相/即梦）",
+                    lines=10,
+                    show_copy_button=True,
+                )
 
     # 事件绑定
     generate_btn.click(
@@ -299,12 +1020,110 @@ with gr.Blocks(
             enable_research,
             search_engine,
             style_radio,
+            batch_mode,
+            history_state,
         ],
         outputs=[
             xiaohongshu_output,
             gongzhonghao_output,
             douyin_output,
             xiaohongshu_preview,
+            tags_output,
+            status_text,
+            history_state,
+            history_dropdown,
+        ],
+    )
+
+    refine_btn.click(
+        fn=refine_content,
+        inputs=[
+            xiaohongshu_output,
+            gongzhonghao_output,
+            douyin_output,
+            refine_input,
+            note_input,
+            style_radio,
+            history_state,
+        ],
+        outputs=[
+            xiaohongshu_output,
+            gongzhonghao_output,
+            douyin_output,
+            xiaohongshu_preview,
+            tags_output,
+            status_text,
+            history_state,
+            history_dropdown,
+        ],
+    )
+
+    title_btn.click(
+        fn=generate_titles,
+        inputs=[
+            xiaohongshu_output,
+            gongzhonghao_output,
+            douyin_output,
+            note_input,
+            style_radio,
+        ],
+        outputs=[
+            xiaohongshu_titles,
+            gongzhonghao_titles,
+            douyin_titles,
+            status_text,
+        ],
+    )
+
+    cover_prompt_btn.click(
+        fn=generate_cover_prompt,
+        inputs=[xiaohongshu_output],
+        outputs=[cover_prompt_output, status_text],
+    )
+
+    # —— 导出事件绑定 ——
+    export_md_xhs_btn.click(
+        fn=lambda text: export_markdown("小红书", text),
+        inputs=[xiaohongshu_output],
+        outputs=[xiaohongshu_download, status_text],
+    )
+    export_docx_xhs_btn.click(
+        fn=lambda text: export_word("小红书", text),
+        inputs=[xiaohongshu_output],
+        outputs=[xiaohongshu_download, status_text],
+    )
+
+    export_md_gzh_btn.click(
+        fn=lambda text: export_markdown("公众号", text),
+        inputs=[gongzhonghao_output],
+        outputs=[gongzhonghao_download, status_text],
+    )
+    export_docx_gzh_btn.click(
+        fn=lambda text: export_word("公众号", text),
+        inputs=[gongzhonghao_output],
+        outputs=[gongzhonghao_download, status_text],
+    )
+
+    export_md_dy_btn.click(
+        fn=lambda text: export_markdown("抖音", text),
+        inputs=[douyin_output],
+        outputs=[douyin_download, status_text],
+    )
+    export_docx_dy_btn.click(
+        fn=lambda text: export_word("抖音", text),
+        inputs=[douyin_output],
+        outputs=[douyin_download, status_text],
+    )
+
+    restore_btn.click(
+        fn=restore_history,
+        inputs=[history_dropdown, history_state],
+        outputs=[
+            xiaohongshu_output,
+            gongzhonghao_output,
+            douyin_output,
+            xiaohongshu_preview,
+            tags_output,
             status_text,
         ],
     )
@@ -316,27 +1135,28 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
-    # 检查 API Key
-    provider = os.getenv("MODEL_PROVIDER", "deepseek")
-    key_map = {
-        "deepseek": "DEEPSEEK_API_KEY",
-        "kimi": "KIMI_API_KEY",
-        "minimax": "MINIMAX_API_KEY",
-        "openai": "OPENAI_API_KEY",
-    }
-    key_var = key_map.get(provider, "MODEL_API_KEY")
-    if not os.getenv(key_var):
-        print(f"⚠️ 警告: 未检测到 {key_var} 环境变量，请先配置 .env 文件")
-        sys.exit(1)
+    # 检查 API Key，未配置时提示但不退出（用户可在 Web UI 中配置）
+    ok, msg = get_config_status()
+    if not ok:
+        print(f"⚠️ {msg}")
+        print("💡 提示: 启动后请在页面顶部的「模型配置」中填写 API Key\n")
+    else:
+        print(f"✅ {msg}\n")
+
+    # 自己找一个可用端口，避免 Gradio 内部用端口 0 导致验证失败
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        free_port = s.getsockname()[1]
 
     print("🚀 启动 Content Agent Web UI...")
-    print("📎 打开浏览器访问: http://127.0.0.1:7860")
+    print(f"📎 打开浏览器访问: http://127.0.0.1:{free_port}")
     print("📡 按 Ctrl+C 停止服务\n")
 
     demo.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
+        server_name="0.0.0.0",
+        server_port=free_port,
         show_error=True,
         share=False,
-        inbrowser=False,
+        inbrowser=True,
     )
