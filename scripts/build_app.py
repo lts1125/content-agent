@@ -60,6 +60,8 @@ args = [
     "--hidden-import", "content_agent.research",
     "--hidden-import", "content_agent.html_renderer",
     "--hidden-import", "content_agent.docx_exporter",
+    "--hidden-import", "content_agent.calendar",
+    "--hidden-import", "content_agent.publisher",
     "--hidden-import", "requests",
     "--hidden-import", "dotenv",
     "--hidden-import", "docx",

@@ -215,6 +215,65 @@ def save_config(provider, deepseek_key, kimi_key, minimax_key, openai_key,
     return msg
 
 
+# ==================== kuaifa 发布配置 ====================
+
+_KUAIFA_CONFIG_DIR = Path.home() / ".kuaifa"
+_KUAIFA_CONFIG_FILE = _KUAIFA_CONFIG_DIR / "config.json"
+
+
+def load_kuaifa_config() -> dict:
+    """加载 kuaifa 配置"""
+    if _KUAIFA_CONFIG_FILE.exists():
+        try:
+            with open(_KUAIFA_CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_kuaifa_config(appid: str, appsecret: str, api_key: str, default_author: str) -> str:
+    """保存 kuaifa 配置到 ~/.kuaifa/config.json"""
+    try:
+        _KUAIFA_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        config = load_kuaifa_config()
+        if appid.strip():
+            config["appid"] = appid.strip()
+        if appsecret.strip():
+            config["appsecret"] = appsecret.strip()
+        if api_key.strip():
+            config["api-key"] = api_key.strip()
+        if default_author.strip():
+            config["default-author"] = default_author.strip()
+        with open(_KUAIFA_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return "✅ kuaifa 配置已保存"
+    except Exception as e:
+        return f"❌ 保存失败: {e}"
+
+
+def verify_kuaifa_config() -> str:
+    """验证微信配置是否正确"""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["kuaifa", "config", "verify-wechat"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0:
+            return "✅ 微信配置验证通过"
+        else:
+            return f"❌ 验证失败: {result.stderr or result.stdout}"
+    except FileNotFoundError:
+        return "❌ kuaifa CLI 未安装，请先安装: npm install -g kuaifa"
+    except subprocess.TimeoutExpired:
+        return "❌ 验证超时"
+    except Exception as e:
+        return f"❌ 验证异常: {e}"
+
+
 def _scale_html(html: str, scale: float = 0.48) -> str:
     """将 HTML 中所有 px 值按比例缩放，用于预览适配容器宽度"""
     def replace_px(match):
@@ -916,6 +975,40 @@ with gr.Blocks(
                 outputs=[config_status],
             )
 
+            # —— kuaifa 发布配置 ——
+            with gr.Accordion("🔧 发布配置（kuaifa 微信公众号）", open=False):
+                kf_cfg = load_kuaifa_config()
+                kuaifa_status = gr.Textbox(
+                    label="状态",
+                    value="已加载配置" if kf_cfg else "未配置，请填写下方信息",
+                    interactive=False,
+                )
+                kuaifa_appid = gr.Textbox(
+                    label="微信 AppID",
+                    placeholder="wx...",
+                    value=kf_cfg.get("appid", ""),
+                )
+                kuaifa_appsecret = gr.Textbox(
+                    label="微信 AppSecret",
+                    placeholder="微信公众号的 AppSecret",
+                    type="password",
+                    value=kf_cfg.get("appsecret", ""),
+                )
+                kuaifa_api_key = gr.Textbox(
+                    label="kuaifa API Key",
+                    placeholder="kuaifa_...",
+                    type="password",
+                    value=kf_cfg.get("api-key", ""),
+                )
+                kuaifa_author = gr.Textbox(
+                    label="默认作者名",
+                    placeholder="如：小爪",
+                    value=kf_cfg.get("default-author", ""),
+                )
+                with gr.Row():
+                    save_kuaifa_btn = gr.Button("💾 保存发布配置", variant="primary", size="sm")
+                    verify_kuaifa_btn = gr.Button("🔐 验证微信配置", size="sm")
+
             gr.Markdown("### 📝 输入")
 
             note_input = gr.Textbox(
@@ -1418,6 +1511,18 @@ with gr.Blocks(
         return "", "", "", [], datetime.now().strftime("%Y-%m-%d"), "", "草稿", "表单已清空"
 
     # 事件绑定
+    # —— kuaifa 发布配置绑定 ——
+    save_kuaifa_btn.click(
+        fn=save_kuaifa_config,
+        inputs=[kuaifa_appid, kuaifa_appsecret, kuaifa_api_key, kuaifa_author],
+        outputs=[kuaifa_status],
+    )
+    verify_kuaifa_btn.click(
+        fn=verify_kuaifa_config,
+        inputs=[],
+        outputs=[kuaifa_status],
+    )
+
     generate_btn.click(
         fn=generate_content,
         inputs=[
