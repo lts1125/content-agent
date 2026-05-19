@@ -228,6 +228,70 @@ def save_config(provider, deepseek_key, kimi_key, minimax_key, openai_key,
     return msg
 
 
+# ==================== 本地笔记库（Obsidian / Markdown 目录）====================
+
+def _get_vault_path() -> str:
+    """读取保存的笔记库路径"""
+    env = _read_env_file()
+    path = env.get("VAULT_PATH", os.getenv("VAULT_PATH", ""))
+    return path.strip()
+
+
+def _save_vault_path(path: str) -> str:
+    """保存笔记库路径到 .env"""
+    p = path.strip()
+    if not p:
+        return "❌ 路径不能为空"
+    if not Path(p).exists():
+        return f"❌ 路径不存在: {p}"
+    _write_env_file({"VAULT_PATH": p})
+    return f"✅ 笔记库路径已保存: {p}"
+
+
+def scan_vault_files(vault_path: str) -> list[str]:
+    """扫描笔记库目录下所有 .md 文件，返回相对路径列表"""
+    if not vault_path or not Path(vault_path).exists():
+        return []
+    vault = Path(vault_path)
+    files = []
+    for f in vault.rglob("*.md"):
+        try:
+            rel = f.relative_to(vault)
+            files.append(str(rel))
+        except ValueError:
+            continue
+    return sorted(files)
+
+
+def read_vault_file(vault_path: str, rel_path: str) -> str:
+    """读取笔记库中指定文件的内容"""
+    if not vault_path or not rel_path:
+        return ""
+    fpath = Path(vault_path) / rel_path
+    try:
+        return fpath.read_text(encoding="utf-8")
+    except Exception as e:
+        return f"❌ 读取失败: {e}"
+
+
+def on_vault_save(vault_path: str):
+    """保存笔记库路径并刷新文件列表"""
+    msg = _save_vault_path(vault_path)
+    choices = scan_vault_files(vault_path.strip())
+    return msg, gr.Dropdown(choices=choices)
+
+
+def on_vault_refresh(vault_path: str):
+    """刷新笔记库文件列表"""
+    choices = scan_vault_files(vault_path.strip())
+    return gr.Dropdown(choices=choices)
+
+
+def on_vault_select(vault_path: str, rel_path: str) -> str:
+    """选择笔记库文件后读取内容"""
+    return read_vault_file(vault_path.strip(), rel_path)
+
+
 # ==================== kuaifa 发布配置 ====================
 
 _KUAIFA_CONFIG_DIR = Path.home() / ".kuaifa"
@@ -1127,6 +1191,28 @@ with gr.Blocks(
             )
 
             with gr.Group():
+                gr.Markdown("#### 📁 或从本地笔记库选择（Obsidian / Markdown 目录）")
+                vault_path_input = gr.Textbox(
+                    label="笔记库路径",
+                    placeholder="/Users/lee/Documents/ObsidianVault",
+                    value=_get_vault_path(),
+                )
+                with gr.Row():
+                    vault_save_btn = gr.Button("💾 保存路径", size="sm")
+                    vault_refresh_btn = gr.Button("🔄 刷新文件列表", size="sm")
+                vault_file_select = gr.Dropdown(
+                    label="选择笔记文件",
+                    choices=scan_vault_files(_get_vault_path()),
+                    value=None,
+                    interactive=True,
+                )
+                vault_status = gr.Textbox(
+                    label="状态",
+                    interactive=False,
+                    visible=True,
+                )
+
+            with gr.Group():
                 gr.Markdown("### ⚙️ 配置")
 
                 platform_check = gr.CheckboxGroup(
@@ -1624,6 +1710,23 @@ with gr.Blocks(
         fn=verify_kuaifa_config,
         inputs=[],
         outputs=[kuaifa_status],
+    )
+
+    # 笔记库事件绑定
+    vault_save_btn.click(
+        fn=on_vault_save,
+        inputs=[vault_path_input],
+        outputs=[vault_status, vault_file_select],
+    )
+    vault_refresh_btn.click(
+        fn=on_vault_refresh,
+        inputs=[vault_path_input],
+        outputs=[vault_file_select],
+    )
+    vault_file_select.change(
+        fn=on_vault_select,
+        inputs=[vault_path_input, vault_file_select],
+        outputs=[note_input],
     )
 
     generate_btn.click(
