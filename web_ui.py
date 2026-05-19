@@ -16,9 +16,21 @@ Content Agent - Web UI
 import os
 import re
 import sys
+import json
 import tempfile
+import logging
 from datetime import datetime
 from pathlib import Path
+
+# 调试日志：打包后 windowed 模式下 stdout 可能被重定向，日志写文件确保可调试
+_LOG_PATH = os.path.join(tempfile.gettempdir(), "ca_launch.log")
+logging.basicConfig(
+    filename=_LOG_PATH,
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+logger = logging.getLogger("ca")
+logger.info("=== web_ui 初始化开始 ===")
 
 # 保护：打包后 windowed 模式下可能没有 stdout/stderr，重定向到 devnull 避免库报错
 if sys.platform == "darwin" and getattr(sys, "frozen", False):
@@ -26,6 +38,7 @@ if sys.platform == "darwin" and getattr(sys, "frozen", False):
         sys.stdout = open(os.devnull, "w")
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
+    logger.info("windowed stdout/stderr 保护已触发")
 
 # 确保 urllib 访问 localhost 时不走代理（Gradio 启动检查需要）
 os.environ.setdefault("NO_PROXY", "127.0.0.1,localhost")
@@ -95,7 +108,7 @@ def _ensure_default_env():
 
 MODEL_PROVIDER=deepseek
 
-# 请在下方填入你的 API Key（通过 Web UI 页面配置也可以）
+# 请在上方模型配置中填写你的 API Key（通过 Web UI 页面配置也可以）
 DEEPSEEK_API_KEY=
 
 # Tavily 搜索增强（可选）
@@ -148,7 +161,7 @@ def get_config_status():
     api_key = os.getenv(key_var, "")
 
     if not api_key or len(api_key) < 10:
-        return False, f"⚠️ 未配置 {key_var}，请先在下方完成模型配置并保存"
+        return False, f"⚠️ 未配置 {key_var}，请先在页面顶部的「模型配置」中填写并保存"
 
     # 自定义平台额外检查
     if provider == "custom":
@@ -255,37 +268,97 @@ def save_kuaifa_config(appid: str, appsecret: str, api_key: str, default_author:
 def verify_kuaifa_config() -> str:
     """验证微信配置是否正确"""
     import subprocess
+    import shutil
+    from pathlib import Path
+
+    # 先检查是否已保存微信配置
+    config_path = Path.home() / ".kuaifa" / "config.json"
+    if not config_path.exists():
+        return "❌ 请先填写并保存微信 AppID 和 AppSecret"
     try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        if not config.get("appid") or not config.get("appsecret"):
+            return "❌ 请先填写并保存微信 AppID 和 AppSecret"
+    except Exception:
+        # 配置文件为空或损坏，等同于未保存
+        return "❌ 请先填写并保存微信 AppID 和 AppSecret"
+
+    # 查找 kuaifa 实际路径
+    kf_path = _find_kuaifa()
+    if not kf_path:
+        return "❌ kuaifa CLI 未安装，请先安装: npm install -g kuaifa"
+
+    # 查找 node（kuaifa 的 shebang 依赖 env node）
+    node_path = shutil.which("node")
+    if not node_path:
+        for candidate in [
+            Path.home() / ".hermes" / "node" / "bin" / "node",
+            Path.home() / ".nvm" / "versions" / "node" / "current" / "bin" / "node",
+            Path("/usr/local/bin/node"),
+            Path("/opt/homebrew/bin/node"),
+        ]:
+            if candidate.exists():
+                node_path = str(candidate.resolve())
+                break
+    if not node_path:
+        return "❌ 未找到 Node.js，kuaifa 需要 Node 环境才能运行"
+
+    try:
+        env = os.environ.copy()
+        extra_paths = [str(Path(kf_path).parent), str(Path(node_path).parent)]
+        env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
         result = subprocess.run(
-            ["kuaifa", "config", "verify-wechat"],
+            [node_path, kf_path, "config", "verify-wechat"],
             capture_output=True,
             text=True,
             timeout=15,
+            env=env,
         )
         if result.returncode == 0:
             return "✅ 微信配置验证通过"
         else:
             return f"❌ 验证失败: {result.stderr or result.stdout}"
-    except FileNotFoundError:
-        return "❌ kuaifa CLI 未安装，请先安装: npm install -g kuaifa"
     except subprocess.TimeoutExpired:
         return "❌ 验证超时"
     except Exception as e:
         return f"❌ 验证异常: {e}"
 
 
+def _find_kuaifa() -> "str | None":
+    """查找 kuaifa 可执行文件（与 publisher.py 保持一致）"""
+    import shutil
+    from pathlib import Path
+    kf = shutil.which("kuaifa")
+    if kf:
+        return kf
+    home = Path.home()
+    candidates = [
+        home / ".hermes" / "node" / "bin" / "kuaifa",
+        home / ".nvm" / "versions" / "node" / "current" / "bin" / "kuaifa",
+        home / ".local" / "bin" / "kuaifa",
+        Path("/usr/local/bin/kuaifa"),
+        Path("/opt/homebrew/bin/kuaifa"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p.resolve())
+    return None
+
+
 def get_kuaifa_setup_status() -> str:
     """检测 kuaifa 安装及配置状态，返回状态提示"""
-    import shutil
     import subprocess
+    from pathlib import Path
 
     # 1. 检查 kuaifa CLI 是否安装
-    if not shutil.which("kuaifa"):
+    kf_path = _find_kuaifa()
+    if not kf_path:
         return (
             "❌ kuaifa 未安装\n"
             "请先在终端运行：\n"
             "  npm install -g kuaifa\n"
-            "完成后再填写下方配置。"
+            "完成后再填写发布配置。"
         )
 
     # 2. 检查是否已配置
@@ -1750,8 +1823,10 @@ with gr.Blocks(
 
 
 if __name__ == "__main__":
+    logger.info("=== __main__ 开始执行 ===")
     # 检查 API Key，未配置时提示但不退出（用户可在 Web UI 中配置）
     ok, msg = get_config_status()
+    logger.info(f"API Key 检查: ok={ok}, msg={msg}")
     if not ok:
         print(f"⚠️ {msg}")
         print("💡 提示: 启动后请在页面顶部的「模型配置」中填写 API Key\n")
@@ -1763,6 +1838,7 @@ if __name__ == "__main__":
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         free_port = s.getsockname()[1]
+    logger.info(f"预分配端口: {free_port}")
 
     print("🚀 启动 Content Agent Web UI...")
     print(f"📎 打开浏览器访问: http://127.0.0.1:{free_port}")
@@ -1771,10 +1847,13 @@ if __name__ == "__main__":
     # 启动定时任务调度器
     try:
         _get_scheduler()
+        logger.info("定时任务调度器已启动")
     except Exception as e:
+        logger.warning(f"定时任务调度器启动失败: {e}")
         print(f"[定时任务] 后台调度器启动失败: {e}")
         print("[定时任务] 提示: 运行 `pip install schedule` 可启用定时任务功能\n")
 
+    logger.info(f"即将调用 demo.launch(port={free_port})")
     demo.launch(
         server_name="0.0.0.0",
         server_port=free_port,
@@ -1782,3 +1861,4 @@ if __name__ == "__main__":
         share=False,
         inbrowser=True,
     )
+    logger.info("demo.launch 已返回（不应该走到这里）")

@@ -5,6 +5,7 @@
 - 微信公众号草稿箱（通过 kuaifa CLI）
 """
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -16,17 +17,65 @@ class PublisherError(Exception):
     pass
 
 
+def _find_kuaifa() -> "str | None":
+    """查找 kuaifa 可执行文件，先用 shutil.which，再尝试常见安装路径"""
+    # 1. 尝试系统 PATH
+    kf = shutil.which("kuaifa")
+    if kf:
+        return kf
+
+    # 2. 尝试常见路径（包括 Hermes 安装的 node 模块）
+    home = Path.home()
+    candidates = [
+        home / ".hermes" / "node" / "bin" / "kuaifa",
+        home / ".nvm" / "versions" / "node" / "current" / "bin" / "kuaifa",
+        home / ".local" / "bin" / "kuaifa",
+        Path("/usr/local/bin/kuaifa"),
+        Path("/opt/homebrew/bin/kuaifa"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p.resolve())
+    return None
+
+
+def _find_node() -> "str | None":
+    """查找 node 可执行文件，kuaifa 的 shebang 依赖 env node"""
+    node = shutil.which("node")
+    if node:
+        return node
+    home = Path.home()
+    candidates = [
+        home / ".hermes" / "node" / "bin" / "node",
+        home / ".nvm" / "versions" / "node" / "current" / "bin" / "node",
+        Path("/usr/local/bin/node"),
+        Path("/opt/homebrew/bin/node"),
+    ]
+    for p in candidates:
+        if p.exists():
+            return str(p.resolve())
+    return None
+
+
 def check_kuaifa() -> tuple[bool, str]:
     """检查 kuaifa CLI 是否可用，返回 (是否可用, 版本信息)"""
-    kuaifa_path = shutil.which("kuaifa")
+    kuaifa_path = _find_kuaifa()
     if not kuaifa_path:
         return False, "kuaifa CLI 未安装或未在 PATH 中"
+    node_path = _find_node()
+    if not node_path:
+        return False, "未找到 Node.js，kuaifa 需要 Node 环境才能运行"
     try:
+        # 确保调用时能找到 node 等依赖
+        env = os.environ.copy()
+        extra_paths = [str(Path(kuaifa_path).parent), str(Path(node_path).parent)]
+        env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
         result = subprocess.run(
-            ["kuaifa", "--version"],
+            [node_path, kuaifa_path, "--version"],
             capture_output=True,
             text=True,
             check=True,
+            env=env,
         )
         return True, result.stdout.strip()
     except subprocess.CalledProcessError as e:
@@ -59,8 +108,19 @@ def publish_wechat_draft(
     if not ok:
         return {"success": False, "message": "❌ kuaifa 未安装", "details": info}
 
+    kuaifa_path = _find_kuaifa()
+    node_path = _find_node()
+    if not kuaifa_path or not node_path:
+        return {"success": False, "message": "❌ 找不到 kuaifa 或 Node.js", "details": ""}
+
+    # 确保调用时能找到 node 等依赖
+    env = os.environ.copy()
+    extra_paths = [str(Path(kuaifa_path).parent), str(Path(node_path).parent)]
+    env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
+
     cmd = [
-        "kuaifa",
+        node_path,
+        kuaifa_path,
         "publish",
         markdown_path,
         "--draft",
@@ -81,6 +141,7 @@ def publish_wechat_draft(
             capture_output=True,
             text=True,
             timeout=60,
+            env=env,
         )
         if result.returncode == 0:
             return {
@@ -121,16 +182,21 @@ def save_content_as_markdown(title: str, content: str, output_dir: str = "") -> 
 
 def list_kuaifa_templates() -> list[dict]:
     """获取 kuaifa 可用模板列表"""
-    ok, _ = check_kuaifa()
-    if not ok:
+    kuaifa_path = _find_kuaifa()
+    node_path = _find_node()
+    if not kuaifa_path or not node_path:
         return []
     try:
+        env = os.environ.copy()
+        extra_paths = [str(Path(kuaifa_path).parent), str(Path(node_path).parent)]
+        env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
         result = subprocess.run(
-            ["kuaifa", "template", "list"],
+            [node_path, kuaifa_path, "template", "list"],
             capture_output=True,
             text=True,
             timeout=10,
             check=True,
+            env=env,
         )
         # 简单解析输出，每行一个模板
         templates = []
