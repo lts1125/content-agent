@@ -159,7 +159,7 @@ python web_ui.py
 - 再改一版（输入修改指令重新生成）
 - **定时任务**（Cron 风格调度，自动生成文案）
 - **内容日历**（发布计划管理，状态跟踪：草稿 → 已排期 → 已生成 → 已发布）
-- **公众号一键发布到草稿箱**（通过 kuaifa CLI，支持封面、摘要、作者）
+- **公众号一键发布到草稿箱**（通过 [kuaifa](https://github.com/shirenchuang/kuaifa) CLI，支持封面、摘要、作者）
 - **kuaifa 发布配置**（Web UI 内直接配置 AppID / AppSecret / API Key）
 - 模型配置（页面内直接填写 API Key）
 
@@ -208,7 +208,7 @@ python scripts/build_app.py
 
 > **注意：公众号发布功能依赖外部 kuaifa CLI**
 > 
-> 打包后的 `.app` 不包含 kuaifa，因为它是 Node.js/npm 工具。如需使用公众号发布功能，需要在目标机器上单独安装：
+>打包后的 `.app` 不包含 kuaifa，因为它是 Node.js/npm 工具。如需使用公众号发布功能，需要在目标机器上单独安装 [kuaifa](https://github.com/shirenchuang/kuaifa)：
 > ```bash
 > npm install -g kuaifa
 > ```
@@ -264,7 +264,7 @@ python main.py -i notes/你的笔记.md
 ### P2 — 工作流整合（已完成）
 - [x] 定时任务 / Cron 调度
 - [x] 内容日历管理
-- [x] 微信公众号一键发布到草稿箱（通过 kuaifa CLI）
+- [x] 微信公众号一键发布到草稿箱（通过 [kuaifa](https://github.com/shirenchuang/kuaifa) CLI）
 
 ---
 
