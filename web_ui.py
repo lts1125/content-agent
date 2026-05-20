@@ -478,12 +478,12 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     Gradio 处理函数
 
     Returns:
-        (xiaohongshu, gongzhonghao, douyin, xiaohongshu_html, tags, status, history, history_dropdown)
+        (xiaohongshu, gongzhonghao, douyin, xiaohongshu_html, tags, status, history)
     """
     # 检查配置
     ok, config_msg = get_config_status()
     if not ok:
-        yield "", "", "", "", "", config_msg, history, gr.Dropdown()
+        yield "", "", "", "", "", config_msg, history
         return
 
     # 如果选了 Tavily，检查 Tavily Key
@@ -492,7 +492,7 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             "", "", "", "", "",
             "⚠️ 使用 Tavily 搜索需要配置 TAVILY_API_KEY\n"
             "请在页面顶部「⭐ 模型配置」中填写 Tavily API Key，或切换为 DuckDuckGo (免费无需 Key)",
-            history, gr.Dropdown()
+            history
         )
         return
 
@@ -502,12 +502,12 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             with open(note_file, "r", encoding="utf-8") as f:
                 note_text = f.read()
         except Exception as e:
-            yield "", "", "", "", "", f"❌ 读取文件失败: {e}", history, gr.Dropdown()
+            yield "", "", "", "", "", f"❌ 读取文件失败: {e}", history
             return
 
     note_text = note_text.strip() if note_text else ""
     if not note_text:
-        yield "", "", "", "", "", "⚠️ 请输入或上传笔记", history, gr.Dropdown()
+        yield "", "", "", "", "", "⚠️ 请输入或上传笔记", history
         return
 
     # 敏感词预检
@@ -528,7 +528,7 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     enabled = {platform_map[p] for p in platforms if p in platform_map}
 
     if not enabled:
-        yield "", "", "", "", "", "⚠️ 请至少选择一个平台", history, gr.Dropdown()
+        yield "", "", "", "", "", "⚠️ 请至少选择一个平台", history
         return
 
     # 拆分多篇笔记
@@ -538,7 +538,7 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
         notes_list = [note_text]
 
     if not notes_list:
-        yield "", "", "", "", "", "⚠️ 未能解析出有效笔记", history, gr.Dropdown()
+        yield "", "", "", "", "", "⚠️ 未能解析出有效笔记", history
         return
 
     # 风格指令
@@ -555,7 +555,7 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     checker = _get_checker()
 
     # 立即反馈：让用户知道已经开始处理
-    yield "", "", "", "", "", "⏳ 正在初始化 Agent，请稍候...", history, gr.Dropdown()
+    yield "", "", "", "", "", "⏳ 正在初始化 Agent，请稍候...", history
 
     all_xiaohongshu = []
     all_gongzhonghao = []
@@ -678,9 +678,6 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     }
     history = [entry] + (history if history else [])[:9]
 
-    choices = [(f"{e['time']} | {e['note_preview']}", str(i)) for i, e in enumerate(history)]
-    history_dropdown = gr.Dropdown(choices=choices, value=None)
-
     status = f"✅ 完成！共 {len(notes_list)} 篇 | 平台: {', '.join(platforms)} | 耗时请参考页面状态栏"
     if sensitive_check and sensitive_check["has_sensitive"]:
         hits = [h["word"] for h in sensitive_check["hits"][:5]]
@@ -689,14 +686,14 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             warn += f" 等共{len(sensitive_check['hits'])}个"
         status += f"\n{warn}"
     progress(1.0, desc="完成")
-    yield xiaohongshu_text, gongzhonghao_text, douyin_text, xiaohongshu_html, tags_text, status, history, history_dropdown
+    yield xiaohongshu_text, gongzhonghao_text, douyin_text, xiaohongshu_html, tags_text, status, history
 
 
 def refine_content(xiaohongshu, gongzhonghao, douyin, instruction, note_text, style, history, progress=gr.Progress()):
     """根据修改指令，在当前文案基础上重新生成"""
     instruction = instruction.strip() if instruction else ""
     if not instruction:
-        return xiaohongshu, gongzhonghao, douyin, "", "", "⚠️ 请输入修改指令", history, gr.Dropdown()
+        return xiaohongshu, gongzhonghao, douyin, "", "", "⚠️ 请输入修改指令", history
 
     progress(0.2, desc="准备优化...")
     agent = _get_agent()
@@ -730,7 +727,7 @@ def refine_content(xiaohongshu, gongzhonghao, douyin, instruction, note_text, st
     try:
         result = agent.run(refine_prompt)
     except Exception as e:
-        return xiaohongshu, gongzhonghao, douyin, "", "", f"❌ 优化失败: {e}", history, gr.Dropdown()
+        return xiaohongshu, gongzhonghao, douyin, "", "", f"❌ 优化失败: {e}", history
 
     progress(0.8, desc="整理结果...")
 
@@ -758,12 +755,9 @@ def refine_content(xiaohongshu, gongzhonghao, douyin, instruction, note_text, st
     }
     history = [entry] + (history if history else [])[:9]
 
-    choices = [(f"{e['time']} | {e['note_preview']}", str(i)) for i, e in enumerate(history)]
-    history_dropdown = gr.Dropdown(choices=choices, value=None)
-
     status = f"✅ 优化完成！指令: {instruction[:20]}..."
     progress(1.0, desc="完成")
-    return result.xiaohongshu, result.gongzhonghao, result.douyin, xiaohongshu_html, result.recommended_tags or "", status, history, history_dropdown
+    return result.xiaohongshu, result.gongzhonghao, result.douyin, xiaohongshu_html, result.recommended_tags or "", status, history
 
 
 def restore_history(selected_index, history):
@@ -1019,451 +1013,453 @@ with gr.Blocks(
     输入你的技术学习笔记，一键生成 **小红书 / 公众号 / 抖音** 三平台文案。
     """)
 
-    with gr.Row():
-        # 左侧：输入区
-        with gr.Column(scale=1):
-            # ── 模型配置 ──
-            with gr.Accordion("⚙️ 模型配置（第一次使用请先填写）", open=False) as config_accordion:
-                config_status = gr.Textbox(
-                    label="状态",
-                    value=get_config_status()[1],
-                    interactive=False,
-                )
+    with gr.Tabs() as main_tabs:
+        with gr.Tab("📝 生成"):
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("### 📝 输入")
 
-                provider_select = gr.Dropdown(
-                    label="选择 Provider",
-                    choices=[
-                        ("DeepSeek (推荐，性价比最高)", "deepseek"),
-                        ("Kimi (月之暗面)", "kimi"),
-                        ("MiniMax", "minimax"),
-                        ("OpenAI / Azure", "openai"),
-                        ("自定义 OpenAI-compatible", "custom"),
-                    ],
-                    value=load_config_for_ui()["provider"],
-                )
-
-                # 各 Provider 的 Key 输入（password 隐藏）
-                deepseek_key_input = gr.Textbox(
-                    label="DeepSeek API Key",
-                    placeholder="sk-...",
-                    type="password",
-                    value=load_config_for_ui()["deepseek_key"],
-                    visible=load_config_for_ui()["provider"] == "deepseek",
-                )
-                kimi_key_input = gr.Textbox(
-                    label="Kimi API Key",
-                    placeholder="sk-...",
-                    type="password",
-                    value=load_config_for_ui()["kimi_key"],
-                    visible=load_config_for_ui()["provider"] == "kimi",
-                )
-                minimax_key_input = gr.Textbox(
-                    label="MiniMax API Key",
-                    placeholder="your-minimax-api-key",
-                    type="password",
-                    value=load_config_for_ui()["minimax_key"],
-                    visible=load_config_for_ui()["provider"] == "minimax",
-                )
-                openai_key_input = gr.Textbox(
-                    label="OpenAI API Key",
-                    placeholder="sk-...",
-                    type="password",
-                    value=load_config_for_ui()["openai_key"],
-                    visible=load_config_for_ui()["provider"] == "openai",
-                )
-
-                # 自定义平台扩展字段
-                with gr.Column(visible=load_config_for_ui()["provider"] == "custom") as custom_fields:
-                    custom_key_input = gr.Textbox(
-                        label="API Key",
-                        placeholder="sk-...",
-                        type="password",
-                        value=load_config_for_ui()["custom_key"],
+                    note_input = gr.Textbox(
+                        label="笔记内容（支持 Markdown，多篇用 --- 分隔）",
+                        placeholder="粘贴你的技术学习笔记...\n\n示例：\n背景：今天学了 xxx\n核心步骤：...\n\n---\n\n第二篇笔记...",
+                        lines=12,
+                        show_copy_button=False,
                     )
-                    custom_base_url_input = gr.Textbox(
-                        label="Base URL",
-                        placeholder="https://api.example.com/v1",
-                        value=load_config_for_ui()["custom_base_url"],
+
+                    file_input = gr.File(
+                        label="或上传文件 (.md / .txt)",
+                        file_types=[".md", ".txt"],
                     )
-                    custom_model_name_input = gr.Textbox(
-                        label="Model Name",
-                        placeholder="deepseek-ai/DeepSeek-V3",
-                        value=load_config_for_ui()["custom_model_name"],
-                    )
-                    gr.Markdown("""
-                    常见平台参考：
-                    - 硅基流动: `https://api.siliconflow.cn/v1` + `deepseek-ai/DeepSeek-V3`
-                    - 通义千问: `https://dashscope.aliyuncs.com/compatible-mode/v1` + `qwen-plus`
-                    - 智谱: `https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash`
-                    - Ollama: `http://localhost:11434/v1` + `qwen2.5:7b`
-                    """)
 
-                # ── Tavily 搜索引擎 Key ──
-                gr.Markdown("---")
-                tavily_key_input = gr.Textbox(
-                    label="Tavily API Key（搜索增强用，可选）",
-                    placeholder="tvly-... （选填，用 Tavily 搜索时需要）",
-                    type="password",
-                    value=load_config_for_ui()["tavily_key"],
-                )
-                gr.Markdown("注册: [https://app.tavily.com/home](https://app.tavily.com/home) 免费 1000 credits/月")
-
-                save_config_btn = gr.Button("💾 保存配置", variant="primary", size="sm")
-
-            # ── Provider 切换时显示/隐藏对应的 Key 输入框 ──
-            def _toggle_provider_inputs(provider):
-                return {
-                    deepseek_key_input: gr.update(visible=provider == "deepseek"),
-                    kimi_key_input: gr.update(visible=provider == "kimi"),
-                    minimax_key_input: gr.update(visible=provider == "minimax"),
-                    openai_key_input: gr.update(visible=provider == "openai"),
-                    custom_fields: gr.update(visible=provider == "custom"),
-                }
-
-            provider_select.change(
-                fn=_toggle_provider_inputs,
-                inputs=[provider_select],
-                outputs=[deepseek_key_input, kimi_key_input, minimax_key_input, openai_key_input, custom_fields],
-            )
-
-            save_config_btn.click(
-                fn=save_config,
-                inputs=[
-                    provider_select,
-                    deepseek_key_input,
-                    kimi_key_input,
-                    minimax_key_input,
-                    openai_key_input,
-                    custom_key_input,
-                    custom_base_url_input,
-                    custom_model_name_input,
-                    tavily_key_input,
-                ],
-                outputs=[config_status],
-            )
-
-            # —— kuaifa 发布配置 ——
-            with gr.Accordion("🔧 发布配置（kuaifa 微信公众号）", open=False):
-                kf_cfg = load_kuaifa_config()
-                kuaifa_status = gr.Textbox(
-                    label="状态",
-                    value=get_kuaifa_setup_status(),
-                    interactive=False,
-                )
-                kuaifa_appid = gr.Textbox(
-                    label="微信 AppID",
-                    placeholder="wx...",
-                    value=kf_cfg.get("appid", ""),
-                )
-                kuaifa_appsecret = gr.Textbox(
-                    label="微信 AppSecret",
-                    placeholder="微信公众号的 AppSecret",
-                    type="password",
-                    value=kf_cfg.get("appsecret", ""),
-                )
-                kuaifa_api_key = gr.Textbox(
-                    label="kuaifa API Key",
-                    placeholder="kuaifa_...",
-                    type="password",
-                    value=kf_cfg.get("api-key", ""),
-                )
-                kuaifa_author = gr.Textbox(
-                    label="默认作者名",
-                    placeholder="如：小爪",
-                    value=kf_cfg.get("default-author", ""),
-                )
-                with gr.Row():
-                    save_kuaifa_btn = gr.Button("💾 保存发布配置", variant="primary", size="sm")
-                    verify_kuaifa_btn = gr.Button("🔐 验证微信配置", size="sm")
-
-            gr.Markdown("### 📝 输入")
-
-            note_input = gr.Textbox(
-                label="笔记内容（支持 Markdown，多篇用 --- 分隔）",
-                placeholder="粘贴你的技术学习笔记...\n\n示例：\n背景：今天学了 xxx\n核心步骤：...\n\n---\n\n第二篇笔记...",
-                lines=12,
-                show_copy_button=False,
-            )
-
-            file_input = gr.File(
-                label="或上传文件 (.md / .txt)",
-                file_types=[".md", ".txt"],
-            )
-
-            with gr.Group():
-                gr.Markdown("#### 📁 或从本地笔记库选择（Obsidian / Markdown 目录）")
-                vault_path_input = gr.Textbox(
-                    label="笔记库路径",
-                    placeholder="/Users/lee/Documents/ObsidianVault",
-                    value=_get_vault_path(),
-                )
-                with gr.Row():
-                    vault_save_btn = gr.Button("💾 保存路径", size="sm")
-                    vault_refresh_btn = gr.Button("🔄 刷新文件列表", size="sm")
-                vault_file_select = gr.Dropdown(
-                    label="选择笔记文件",
-                    choices=scan_vault_files(_get_vault_path()),
-                    value=None,
-                    interactive=True,
-                )
-                vault_status = gr.Textbox(
-                    label="状态",
-                    interactive=False,
-                    visible=True,
-                )
-
-            with gr.Group():
-                gr.Markdown("### ⚙️ 配置")
-
-                platform_check = gr.CheckboxGroup(
-                    label="选择平台",
-                    choices=["小红书", "公众号", "抖音"],
-                    value=["小红书", "公众号", "抖音"],
-                )
-
-                enable_research = gr.Checkbox(
-                    label="🔍 启用搜索增强（自动补充背景资料）",
-                    value=False,
-                )
-
-                search_engine = gr.Dropdown(
-                    label="搜索引擎",
-                    choices=[
-                        ("DuckDuckGo (免费)", "duckduckgo"),
-                        ("Tavily (需 API Key)", "tavily"),
-                    ],
-                    value="duckduckgo",
-                )
-
-                style_radio = gr.Radio(
-                    label="🎨 文案风格",
-                    choices=["专业干货", "轻松口语", "情绪共鸣", "悬念钩子"],
-                    value="专业干货",
-                )
-
-                batch_mode = gr.Checkbox(
-                    label="📤 批量模式（多篇笔记用 --- 分隔）",
-                    value=False,
-                )
-
-            generate_btn = gr.Button("🚀 生成三平台文案", variant="primary", size="lg")
-
-            status_text = gr.Textbox(
-                label="状态",
-                value="等待生成...",
-                interactive=False,
-            )
-
-            with gr.Group():
-                gr.Markdown("### 📜 生成历史")
-                history_dropdown = gr.Dropdown(
-                    label="选择历史记录",
-                    choices=[],
-                    value=None,
-                )
-                restore_btn = gr.Button("🔄 恢复到输出区", variant="secondary", size="sm")
-
-        # 右侧：输出区
-        with gr.Column(scale=1):
-            gr.Markdown("### 📋 输出")
-
-            with gr.Tabs():
-                with gr.TabItem("📱 小红书"):
-                    xiaohongshu_output = gr.Textbox(
-                        label="小红书文案",
-                        lines=18,
-                        show_copy_button=True,
-                    )
-                    xiaohongshu_preview = gr.HTML()
-                    with gr.Row():
-                        export_md_xhs_btn = gr.Button("📥 导出 Markdown", size="sm")
-                        export_docx_xhs_btn = gr.Button("📄 导出 Word", size="sm")
-                    xiaohongshu_download = gr.File(label="下载文件", visible=False)
-
-                with gr.TabItem("💬 公众号"):
-                    gongzhonghao_output = gr.Textbox(
-                        label="公众号文案",
-                        lines=18,
-                        show_copy_button=True,
-                    )
-                    with gr.Row():
-                        export_md_gzh_btn = gr.Button("📥 导出 Markdown", size="sm")
-                        export_docx_gzh_btn = gr.Button("📄 导出 Word", size="sm")
-                    gongzhonghao_download = gr.File(label="下载文件", visible=False)
-
-                    # 发布到微信公众号草稿箱
-                    with gr.Accordion("📤 发布到公众号草稿箱（需安装 kuaifa CLI）", open=False):
-                        publish_title = gr.Textbox(
-                            label="文章标题",
-                            placeholder="留空则使用默认标题",
-                            lines=1,
+                    with gr.Group():
+                        gr.Markdown("#### 📁 或从本地笔记库选择（Obsidian / Markdown 目录）")
+                        vault_path_input = gr.Textbox(
+                            label="笔记库路径",
+                            placeholder="/Users/lee/Documents/ObsidianVault",
+                            value=_get_vault_path(),
                         )
-                        publish_author = gr.Textbox(
-                            label="作者名（可选）",
-                            placeholder="作者名",
-                            lines=1,
+                        with gr.Row():
+                            vault_save_btn = gr.Button("💾 保存路径", size="sm")
+                            vault_refresh_btn = gr.Button("🔄 刷新文件列表", size="sm")
+                        vault_file_select = gr.Dropdown(
+                            label="选择笔记文件",
+                            choices=scan_vault_files(_get_vault_path()),
+                            value=None,
+                            interactive=True,
                         )
-                        publish_digest = gr.Textbox(
-                            label="文章摘要（可选）",
-                            placeholder="摘要会显示在公众号列表中",
+                        vault_status = gr.Textbox(
+                            label="状态",
+                            interactive=False,
+                            visible=True,
+                        )
+
+                    with gr.Group():
+                        gr.Markdown("### ⚙️ 配置")
+
+                        platform_check = gr.CheckboxGroup(
+                            label="选择平台",
+                            choices=["小红书", "公众号", "抖音"],
+                            value=["小红书", "公众号", "抖音"],
+                        )
+
+                        enable_research = gr.Checkbox(
+                            label="🔍 启用搜索增强（自动补充背景资料）",
+                            value=False,
+                        )
+
+                        search_engine = gr.Dropdown(
+                            label="搜索引擎",
+                            choices=[
+                                ("DuckDuckGo (免费)", "duckduckgo"),
+                                ("Tavily (需 API Key)", "tavily"),
+                            ],
+                            value="duckduckgo",
+                        )
+
+                        style_radio = gr.Radio(
+                            label="🎨 文案风格",
+                            choices=["专业干货", "轻松口语", "情绪共鸣", "悬念钩子"],
+                            value="专业干货",
+                        )
+
+                        batch_mode = gr.Checkbox(
+                            label="📤 批量模式（多篇笔记用 --- 分隔）",
+                            value=False,
+                        )
+
+                    generate_btn = gr.Button("🚀 生成三平台文案", variant="primary", size="lg")
+
+                    status_text = gr.Textbox(
+                        label="状态",
+                        value="等待生成...",
+                        interactive=False,
+                    )
+
+                with gr.Column(scale=1):
+                    gr.Markdown("### 📋 输出")
+
+                    with gr.Tabs():
+                        with gr.TabItem("📱 小红书"):
+                            xiaohongshu_output = gr.Textbox(
+                                label="小红书文案",
+                                lines=18,
+                                show_copy_button=True,
+                            )
+                            xiaohongshu_preview = gr.HTML()
+                            with gr.Row():
+                                export_md_xhs_btn = gr.Button("📥 导出 Markdown", size="sm")
+                                export_docx_xhs_btn = gr.Button("📄 导出 Word", size="sm")
+                            xiaohongshu_download = gr.File(label="下载文件", visible=False)
+
+                        with gr.TabItem("💬 公众号"):
+                            gongzhonghao_output = gr.Textbox(
+                                label="公众号文案",
+                                lines=18,
+                                show_copy_button=True,
+                            )
+                            with gr.Row():
+                                export_md_gzh_btn = gr.Button("📥 导出 Markdown", size="sm")
+                                export_docx_gzh_btn = gr.Button("📄 导出 Word", size="sm")
+                            gongzhonghao_download = gr.File(label="下载文件", visible=False)
+
+                            # 发布到微信公众号草稿箱
+                            with gr.Accordion("📤 发布到公众号草稿箱（需安装 kuaifa CLI）", open=False):
+                                publish_title = gr.Textbox(
+                                    label="文章标题",
+                                    placeholder="留空则使用默认标题",
+                                    lines=1,
+                                )
+                                publish_author = gr.Textbox(
+                                    label="作者名（可选）",
+                                    placeholder="作者名",
+                                    lines=1,
+                                )
+                                publish_digest = gr.Textbox(
+                                    label="文章摘要（可选）",
+                                    placeholder="摘要会显示在公众号列表中",
+                                    lines=2,
+                                )
+                                gr.Markdown("**封面图片**（必填：微信草稿要求必须有封面）")
+                                cover_upload = gr.File(
+                                    label="上传封面图片",
+                                    file_types=["image"],
+                                    type="filepath",
+                                )
+                                cover_url = gr.Textbox(
+                                    label="或填入图片 URL",
+                                    placeholder="https://example.com/cover.jpg",
+                                    lines=1,
+                                )
+                                publish_wechat_btn = gr.Button(
+                                    "📤 一键发布到草稿箱",
+                                    variant="primary",
+                                )
+                                publish_result = gr.Textbox(
+                                    label="发布结果",
+                                    lines=4,
+                                    interactive=False,
+                                )
+
+                        with gr.TabItem("🎥 抖音"):
+                            douyin_output = gr.Textbox(
+                                label="抖音文案",
+                                lines=18,
+                                show_copy_button=True,
+                            )
+                            with gr.Row():
+                                export_md_dy_btn = gr.Button("📥 导出 Markdown", size="sm")
+                                export_docx_dy_btn = gr.Button("📄 导出 Word", size="sm")
+                            douyin_download = gr.File(label="下载文件", visible=False)
+
+                        gr.Markdown("### 🏷️ 推荐标签/话题")
+                        tags_output = gr.Textbox(
+                            label="生成的各平台推荐标签，可直接复制使用",
+                            lines=8,
+                            show_copy_button=True,
+                        )
+
+                    with gr.Group():
+                        gr.Markdown("### ✏️ 不满意？再改一版")
+                        refine_input = gr.Textbox(
+                            label="修改指令",
+                            placeholder="例如：更口语化 / 加个钩子 / 缩短一点 / 多加点 emoji / 语气更在地气",
                             lines=2,
                         )
-                        gr.Markdown("**封面图片**（必填：微信草稿要求必须有封面）")
-                        cover_upload = gr.File(
-                            label="上传封面图片",
-                            file_types=["image"],
-                            type="filepath",
+                        refine_btn = gr.Button("🔄 再改一版", variant="secondary")
+
+                        gr.Markdown("### 🎲 标题 A/B 测试")
+                        title_btn = gr.Button("🎩 生成备选标题", variant="secondary")
+                        with gr.Row():
+                            with gr.Column():
+                                gr.Markdown("📱 小红书")
+                                xiaohongshu_titles = gr.Markdown("点击上方按钮生成")
+                            with gr.Column():
+                                gr.Markdown("💬 公众号")
+                                gongzhonghao_titles = gr.Markdown("点击上方按钮生成")
+                            with gr.Column():
+                                gr.Markdown("🎥 抖音")
+                                douyin_titles = gr.Markdown("点击上方按钮生成")
+
+                        gr.Markdown("### 🎨 配图 Prompt 生成")
+                        cover_prompt_btn = gr.Button("🖼️ 生成小红书封面配图 Prompt", variant="secondary")
+                        cover_prompt_output = gr.Textbox(
+                            label="绘画 Prompt（可复制到 Midjourney/通义万相/即梦）",
+                            lines=10,
+                            show_copy_button=True,
                         )
-                        cover_url = gr.Textbox(
-                            label="或填入图片 URL",
-                            placeholder="https://example.com/cover.jpg",
-                            lines=1,
-                        )
-                        publish_wechat_btn = gr.Button(
-                            "📤 一键发布到草稿箱",
-                            variant="primary",
-                        )
-                        publish_result = gr.Textbox(
-                            label="发布结果",
-                            lines=4,
+
+        with gr.Tab("⚙️ 配置"):
+            with gr.Row():
+                with gr.Column(scale=1):
+                    # ── 模型配置 ──
+                    with gr.Accordion("⚙️ 模型配置（第一次使用请先填写）", open=False) as config_accordion:
+                        config_status = gr.Textbox(
+                            label="状态",
+                            value=get_config_status()[1],
                             interactive=False,
                         )
 
-                with gr.TabItem("🎥 抖音"):
-                    douyin_output = gr.Textbox(
-                        label="抖音文案",
-                        lines=18,
-                        show_copy_button=True,
+                        provider_select = gr.Dropdown(
+                            label="选择 Provider",
+                            choices=[
+                                ("DeepSeek (推荐，性价比最高)", "deepseek"),
+                                ("Kimi (月之暗面)", "kimi"),
+                                ("MiniMax", "minimax"),
+                                ("OpenAI / Azure", "openai"),
+                                ("自定义 OpenAI-compatible", "custom"),
+                            ],
+                            value=load_config_for_ui()["provider"],
+                        )
+
+                        # 各 Provider 的 Key 输入（password 隐藏）
+                        deepseek_key_input = gr.Textbox(
+                            label="DeepSeek API Key",
+                            placeholder="sk-...",
+                            type="password",
+                            value=load_config_for_ui()["deepseek_key"],
+                            visible=load_config_for_ui()["provider"] == "deepseek",
+                        )
+                        kimi_key_input = gr.Textbox(
+                            label="Kimi API Key",
+                            placeholder="sk-...",
+                            type="password",
+                            value=load_config_for_ui()["kimi_key"],
+                            visible=load_config_for_ui()["provider"] == "kimi",
+                        )
+                        minimax_key_input = gr.Textbox(
+                            label="MiniMax API Key",
+                            placeholder="your-minimax-api-key",
+                            type="password",
+                            value=load_config_for_ui()["minimax_key"],
+                            visible=load_config_for_ui()["provider"] == "minimax",
+                        )
+                        openai_key_input = gr.Textbox(
+                            label="OpenAI API Key",
+                            placeholder="sk-...",
+                            type="password",
+                            value=load_config_for_ui()["openai_key"],
+                            visible=load_config_for_ui()["provider"] == "openai",
+                        )
+
+                        # 自定义平台扩展字段
+                        with gr.Column(visible=load_config_for_ui()["provider"] == "custom") as custom_fields:
+                            custom_key_input = gr.Textbox(
+                                label="API Key",
+                                placeholder="sk-...",
+                                type="password",
+                                value=load_config_for_ui()["custom_key"],
+                            )
+                            custom_base_url_input = gr.Textbox(
+                                label="Base URL",
+                                placeholder="https://api.example.com/v1",
+                                value=load_config_for_ui()["custom_base_url"],
+                            )
+                            custom_model_name_input = gr.Textbox(
+                                label="Model Name",
+                                placeholder="deepseek-ai/DeepSeek-V3",
+                                value=load_config_for_ui()["custom_model_name"],
+                            )
+                            gr.Markdown("""
+                            常见平台参考：
+                            - 硅基流动: `https://api.siliconflow.cn/v1` + `deepseek-ai/DeepSeek-V3`
+                            - 通义千问: `https://dashscope.aliyuncs.com/compatible-mode/v1` + `qwen-plus`
+                            - 智谱: `https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash`
+                            - Ollama: `http://localhost:11434/v1` + `qwen2.5:7b`
+                            """)
+
+                        # ── Tavily 搜索引擎 Key ──
+                        gr.Markdown("---")
+                        tavily_key_input = gr.Textbox(
+                            label="Tavily API Key（搜索增强用，可选）",
+                            placeholder="tvly-... （选填，用 Tavily 搜索时需要）",
+                            type="password",
+                            value=load_config_for_ui()["tavily_key"],
+                        )
+                        gr.Markdown("注册: [https://app.tavily.com/home](https://app.tavily.com/home) 免费 1000 credits/月")
+
+                        save_config_btn = gr.Button("💾 保存配置", variant="primary", size="sm")
+
+                    # ── Provider 切换时显示/隐藏对应的 Key 输入框 ──
+                    def _toggle_provider_inputs(provider):
+                        return {
+                            deepseek_key_input: gr.update(visible=provider == "deepseek"),
+                            kimi_key_input: gr.update(visible=provider == "kimi"),
+                            minimax_key_input: gr.update(visible=provider == "minimax"),
+                            openai_key_input: gr.update(visible=provider == "openai"),
+                            custom_fields: gr.update(visible=provider == "custom"),
+                        }
+
+                    provider_select.change(
+                        fn=_toggle_provider_inputs,
+                        inputs=[provider_select],
+                        outputs=[deepseek_key_input, kimi_key_input, minimax_key_input, openai_key_input, custom_fields],
+                    )
+
+                    save_config_btn.click(
+                        fn=save_config,
+                        inputs=[
+                            provider_select,
+                            deepseek_key_input,
+                            kimi_key_input,
+                            minimax_key_input,
+                            openai_key_input,
+                            custom_key_input,
+                            custom_base_url_input,
+                            custom_model_name_input,
+                            tavily_key_input,
+                        ],
+                        outputs=[config_status],
+                    )
+
+                with gr.Column(scale=1):
+                    # —— kuaifa 发布配置 ——
+                    with gr.Accordion("🔧 发布配置（kuaifa 微信公众号）", open=False):
+                        kf_cfg = load_kuaifa_config()
+                        kuaifa_status = gr.Textbox(
+                            label="状态",
+                            value=get_kuaifa_setup_status(),
+                            interactive=False,
+                        )
+                        kuaifa_appid = gr.Textbox(
+                            label="微信 AppID",
+                            placeholder="wx...",
+                            value=kf_cfg.get("appid", ""),
+                        )
+                        kuaifa_appsecret = gr.Textbox(
+                            label="微信 AppSecret",
+                            placeholder="微信公众号的 AppSecret",
+                            type="password",
+                            value=kf_cfg.get("appsecret", ""),
+                        )
+                        kuaifa_api_key = gr.Textbox(
+                            label="kuaifa API Key",
+                            placeholder="kuaifa_...",
+                            type="password",
+                            value=kf_cfg.get("api-key", ""),
+                        )
+                        kuaifa_author = gr.Textbox(
+                            label="默认作者名",
+                            placeholder="如：小爪",
+                            value=kf_cfg.get("default-author", ""),
+                        )
+                        with gr.Row():
+                            save_kuaifa_btn = gr.Button("💾 保存发布配置", variant="primary", size="sm")
+                            verify_kuaifa_btn = gr.Button("🔐 验证微信配置", size="sm")
+
+            gr.Markdown("### ⏰ 定时任务管理")
+            gr.Markdown("每个任务绑定一个具体笔记文件（如 `notes/daily.md`），到点后自动生成文案。也可以填写目录，会处理目录下所有笔记。")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 添加任务")
+                    task_name_input = gr.Textbox(label="任务名称", placeholder="例如：每日早报", value="每日生成")
+                    task_input_dir = gr.Textbox(label="输入文件路径", placeholder="notes/daily.md 或目录 notes/", value="notes/daily.md")
+                    task_output_dir = gr.Textbox(label="输出目录", placeholder="output/", value="output")
+                    with gr.Row():
+                        task_hour = gr.Dropdown(
+                            label="小时",
+                            choices=[f"{h:02d}" for h in range(24)],
+                            value="09",
+                        )
+                        task_minute = gr.Dropdown(
+                            label="分钟",
+                            choices=[f"{m:02d}" for m in range(0, 60, 5)],
+                            value="00",
+                        )
+                    task_weekdays = gr.CheckboxGroup(
+                        label="执行日期（不选=每天）",
+                        choices=["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
+                    )
+                    add_task_btn = gr.Button("➕ 添加任务", variant="primary")
+                    task_status = gr.Textbox(label="状态", value="等待操作...", interactive=False)
+
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 任务列表")
+                    task_dropdown = gr.Dropdown(label="选择任务", choices=[], value=None)
+                    task_detail = gr.Markdown("点击刷新查看任务列表")
+                    with gr.Row():
+                        refresh_tasks_btn = gr.Button("🔄 刷新")
+                        run_now_btn = gr.Button("▶️ 立即执行", variant="secondary")
+                        toggle_btn = gr.Button("⏸️ 启用/暂停")
+                        delete_task_btn = gr.Button("🗑️ 删除", variant="stop")
+
+            gr.Markdown("管理内容发布排期，跟踪状态。")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 添加/编辑计划")
+                    cal_id_hidden = gr.Textbox(visible=False, value="")
+                    cal_title = gr.Textbox(label="标题", placeholder="例如：MCP协议介绍", value="")
+                    cal_topic = gr.Textbox(label="主题/关键词", placeholder="例如：MCP, AI工具", value="")
+                    cal_platforms = gr.CheckboxGroup(
+                        label="平台",
+                        choices=["小红书", "公众号", "抖音"],
+                        value=["小红书"],
+                    )
+                    cal_date = gr.Textbox(
+                        label="排期日期",
+                        placeholder="2026-05-20",
+                        value=datetime.now().strftime("%Y-%m-%d"),
+                    )
+                    cal_note_file = gr.Textbox(label="关联笔记文件", placeholder="notes/mcp_intro.md", value="")
+                    cal_status = gr.Dropdown(
+                        label="状态",
+                        choices=["草稿", "已排期", "已生成", "已发布"],
+                        value="草稿",
                     )
                     with gr.Row():
-                        export_md_dy_btn = gr.Button("📥 导出 Markdown", size="sm")
-                        export_docx_dy_btn = gr.Button("📄 导出 Word", size="sm")
-                    douyin_download = gr.File(label="下载文件", visible=False)
+                        cal_add_btn = gr.Button("➕ 添加", variant="primary")
+                        cal_update_btn = gr.Button("💾 更新", variant="secondary")
+                        cal_clear_btn = gr.Button("🔄 清空", variant="secondary")
+                    cal_status_msg = gr.Textbox(label="状态", value="等待操作...", interactive=False)
 
-                with gr.TabItem("⏰ 定时任务"):
-                    gr.Markdown("### ⏰ 定时任务管理")
-                    gr.Markdown("每个任务绑定一个具体笔记文件（如 `notes/daily.md`），到点后自动生成文案。也可以填写目录，会处理目录下所有笔记。")
-
+                with gr.Column(scale=1):
+                    gr.Markdown("#### 计划列表")
+                    cal_filter = gr.Dropdown(
+                        label="筛选",
+                        choices=["全部", "本周", "本月", "草稿", "已排期", "已生成", "已发布"],
+                        value="全部",
+                    )
+                    cal_dropdown = gr.Dropdown(label="选择计划", choices=[], value=None)
+                    cal_detail = gr.Markdown("点击刷新查看计划列表")
                     with gr.Row():
-                        with gr.Column(scale=1):
-                            gr.Markdown("#### 添加任务")
-                            task_name_input = gr.Textbox(label="任务名称", placeholder="例如：每日早报", value="每日生成")
-                            task_input_dir = gr.Textbox(label="输入文件路径", placeholder="notes/daily.md 或目录 notes/", value="notes/daily.md")
-                            task_output_dir = gr.Textbox(label="输出目录", placeholder="output/", value="output")
-                            with gr.Row():
-                                task_hour = gr.Dropdown(
-                                    label="小时",
-                                    choices=[f"{h:02d}" for h in range(24)],
-                                    value="09",
-                                )
-                                task_minute = gr.Dropdown(
-                                    label="分钟",
-                                    choices=[f"{m:02d}" for m in range(0, 60, 5)],
-                                    value="00",
-                                )
-                            task_weekdays = gr.CheckboxGroup(
-                                label="执行日期（不选=每天）",
-                                choices=["周一", "周二", "周三", "周四", "周五", "周六", "周日"],
-                            )
-                            add_task_btn = gr.Button("➕ 添加任务", variant="primary")
-                            task_status = gr.Textbox(label="状态", value="等待操作...", interactive=False)
+                        cal_refresh_btn = gr.Button("🔄 刷新")
+                        cal_delete_btn = gr.Button("🗑️ 删除", variant="stop")
 
-                        with gr.Column(scale=1):
-                            gr.Markdown("#### 任务列表")
-                            task_dropdown = gr.Dropdown(label="选择任务", choices=[], value=None)
-                            task_detail = gr.Markdown("点击刷新查看任务列表")
-                            with gr.Row():
-                                refresh_tasks_btn = gr.Button("🔄 刷新")
-                                run_now_btn = gr.Button("▶️ 立即执行", variant="secondary")
-                                toggle_btn = gr.Button("⏸️ 启用/暂停")
-                                delete_task_btn = gr.Button("🗑️ 删除", variant="stop")
-
-                with gr.TabItem("📅 内容日历"):
-                    gr.Markdown("### 📅 内容发布计划")
-                    gr.Markdown("管理内容发布排期，跟踪状态。")
-
+        with gr.Tab("📚 历史"):
+            gr.Markdown("### 📚 历史记录管理")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    history_dropdown_big = gr.Dropdown(
+                        label="选择历史记录",
+                        choices=[],
+                        value=None,
+                    )
                     with gr.Row():
-                        with gr.Column(scale=1):
-                            gr.Markdown("#### 添加/编辑计划")
-                            cal_id_hidden = gr.Textbox(visible=False, value="")
-                            cal_title = gr.Textbox(label="标题", placeholder="例如：MCP协议介绍", value="")
-                            cal_topic = gr.Textbox(label="主题/关键词", placeholder="例如：MCP, AI工具", value="")
-                            cal_platforms = gr.CheckboxGroup(
-                                label="平台",
-                                choices=["小红书", "公众号", "抖音"],
-                                value=["小红书"],
-                            )
-                            cal_date = gr.Textbox(
-                                label="排期日期",
-                                placeholder="2026-05-20",
-                                value=datetime.now().strftime("%Y-%m-%d"),
-                            )
-                            cal_note_file = gr.Textbox(label="关联笔记文件", placeholder="notes/mcp_intro.md", value="")
-                            cal_status = gr.Dropdown(
-                                label="状态",
-                                choices=["草稿", "已排期", "已生成", "已发布"],
-                                value="草稿",
-                            )
-                            with gr.Row():
-                                cal_add_btn = gr.Button("➕ 添加", variant="primary")
-                                cal_update_btn = gr.Button("💾 更新", variant="secondary")
-                                cal_clear_btn = gr.Button("🔄 清空", variant="secondary")
-                            cal_status_msg = gr.Textbox(label="状态", value="等待操作...", interactive=False)
-
-                        with gr.Column(scale=1):
-                            gr.Markdown("#### 计划列表")
-                            cal_filter = gr.Dropdown(
-                                label="筛选",
-                                choices=["全部", "本周", "本月", "草稿", "已排期", "已生成", "已发布"],
-                                value="全部",
-                            )
-                            cal_dropdown = gr.Dropdown(label="选择计划", choices=[], value=None)
-                            cal_detail = gr.Markdown("点击刷新查看计划列表")
-                            with gr.Row():
-                                cal_refresh_btn = gr.Button("🔄 刷新")
-                                cal_delete_btn = gr.Button("🗑️ 删除", variant="stop")
-
-            with gr.Group():
-                gr.Markdown("### 🏷️ 推荐标签/话题")
-                tags_output = gr.Textbox(
-                    label="生成的各平台推荐标签，可直接复制使用",
-                    lines=8,
-                    show_copy_button=True,
-                )
-
-            with gr.Group():
-                gr.Markdown("### ✏️ 不满意？再改一版")
-                refine_input = gr.Textbox(
-                    label="修改指令",
-                    placeholder="例如：更口语化 / 加个钩子 / 缩短一点 / 多加点 emoji / 语气更在地气",
-                    lines=2,
-                )
-                refine_btn = gr.Button("🔄 再改一版", variant="secondary")
-
-            with gr.Group():
-                gr.Markdown("### 🎲 标题 A/B 测试")
-                title_btn = gr.Button("🎩 生成备选标题", variant="secondary")
-                with gr.Row():
-                    with gr.Column():
-                        gr.Markdown("📱 小红书")
-                        xiaohongshu_titles = gr.Markdown("点击上方按钮生成")
-                    with gr.Column():
-                        gr.Markdown("💬 公众号")
-                        gongzhonghao_titles = gr.Markdown("点击上方按钮生成")
-                    with gr.Column():
-                        gr.Markdown("🎥 抖音")
-                        douyin_titles = gr.Markdown("点击上方按钮生成")
-
-            with gr.Group():
-                gr.Markdown("### 🎨 配图 Prompt 生成")
-                cover_prompt_btn = gr.Button("🖼️ 生成小红书封面配图 Prompt", variant="secondary")
-                cover_prompt_output = gr.Textbox(
-                    label="绘画 Prompt（可复制到 Midjourney/通义万相/即梦）",
-                    lines=10,
-                    show_copy_button=True,
-                )
-
-    # ==================== 定时任务处理函数 ====================
+                        restore_big_btn = gr.Button("🔄 加载到工作台", variant="primary")
+                        clear_history_big_btn = gr.Button("🗑️ 清空全部历史", variant="stop")
+                with gr.Column(scale=1):
+                    history_detail = gr.Markdown("**历史记录详情**\n\n切换到此页面时会自动加载历史列表。\n选择一条记录可查看详情。")
 
     def _get_scheduler():
         """获取调度器单例（延迟初始化，避免导入失败）"""
@@ -1749,7 +1745,6 @@ with gr.Blocks(
             tags_output,
             status_text,
             history_state,
-            history_dropdown,
         ],
     )
 
@@ -1772,7 +1767,6 @@ with gr.Blocks(
             tags_output,
             status_text,
             history_state,
-            history_dropdown,
         ],
     )
 
@@ -1906,9 +1900,52 @@ with gr.Blocks(
         outputs=[cal_id_hidden, cal_title, cal_topic, cal_platforms, cal_date, cal_note_file, cal_status, cal_status_msg],
     )
 
-    restore_btn.click(
+    # 历史页事件绑定
+    def refresh_history_list(history):
+        if not history:
+            return gr.Dropdown(choices=[]), "暂无历史记录"
+        choices = [(f"{i+1}. {h.get('note_preview', h.get('note', '无标题'))[:40]}...", i) for i, h in enumerate(history)]
+        return gr.Dropdown(choices=choices), f"✅ 已加载 {len(history)} 条历史记录"
+
+    def show_history_detail(idx, history):
+        if idx is None or idx < 0 or idx >= len(history):
+            return "请选择一条历史记录"
+        h = history[idx]
+        ts = h.get("time", h.get("timestamp", "未知"))
+        note_src = h.get('note_preview', h.get('note', '无标题'))
+        return f"""**笔记来源**: {note_src[:80]}...
+
+**生成时间**: {ts}
+
+**小红书**:
+{h.get('xiaohongshu', '')[:300]}...
+
+**公众号**:
+{h.get('gongzhonghao', '')[:300]}...
+
+**抖音**:
+{h.get('douyin', '')[:300]}...
+"""
+
+    def clear_all_history():
+        return [], gr.Dropdown(choices=[]), "✅ 历史记录已清空"
+
+    # 页面切换时自动刷新历史列表
+    main_tabs.select(
+        fn=refresh_history_list,
+        inputs=[history_state],
+        outputs=[history_dropdown_big, history_detail],
+    )
+
+    history_dropdown_big.change(
+        fn=show_history_detail,
+        inputs=[history_dropdown_big, history_state],
+        outputs=[history_detail],
+    )
+
+    restore_big_btn.click(
         fn=restore_history,
-        inputs=[history_dropdown, history_state],
+        inputs=[history_dropdown_big, history_state],
         outputs=[
             xiaohongshu_output,
             gongzhonghao_output,
@@ -1917,6 +1954,12 @@ with gr.Blocks(
             tags_output,
             status_text,
         ],
+    )
+
+    clear_history_big_btn.click(
+        fn=clear_all_history,
+        inputs=[],
+        outputs=[history_state, history_dropdown_big, history_detail],
     )
 
     gr.Markdown("""
