@@ -24,6 +24,15 @@ from content_agent.html_renderer import XiaohongshuRenderer
 from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
 
+# Phase 0: 新架构（Orchestrator + Multi-Agent）
+try:
+    from agents import Orchestrator, TaskInput
+    from agents.store import init_db, save_task
+    HAS_NEW_ARCH = True
+except Exception as e:
+    HAS_NEW_ARCH = False
+    _import_err = e
+
 
 DEFAULT_NOTES = """背景：下班后决定学 AI Agent 开发，想做一个内容改写 Agent 做副业。
 
@@ -250,6 +259,99 @@ def process_single_note(
     return result
 
 
+def process_single_note_v2(
+    note_path: Path,
+    raw_notes: str,
+    enabled_platforms: set,
+    args,
+    note_output_dir: Path,
+) -> dict:
+    """
+    Phase 0: 基于 Orchestrator 的新链路。
+    功能与 process_single_note 等价，但内部走 agents/ 层。
+    """
+    from agents import Orchestrator, TaskInput
+    from agents.store import save_task
+    from content_agent.html_renderer import XiaohongshuRenderer
+    from content_agent.sensitive_checker import SensitiveChecker
+
+    result = {"success": False, "saved_files": [], "error": None}
+    note_name = note_path.stem
+
+    print(f"\n{'=' * 60}")
+    print(f"📄 处理 (v2): {note_name} ({len(raw_notes)} 字)")
+    print(f"{'=' * 60}")
+
+    # 敏感词预检（保留现有行为）
+    try:
+        sc = SensitiveChecker()
+        check_res = sc.check(raw_notes)
+        if check_res["has_sensitive"]:
+            hits = [h["word"] for h in check_res["hits"][:5]]
+            print(f"   ⚠️ 敏感词预检: 检测到 {check_res['local_count']} 个敏感/违规词: {', '.join(hits)}")
+    except Exception:
+        pass
+
+    # Orchestrator 调用
+    try:
+        orch = Orchestrator()
+        task_input = TaskInput(
+            note_text=raw_notes,
+            note_source=str(note_path),
+            platforms=list(enabled_platforms),
+            enable_research=args.research,
+            search_engine=args.search_engine,
+        )
+        state = orch.run(task_input)
+    except Exception as e:
+        result["error"] = f"Orchestrator 调用失败: {e}"
+        print(f"   ❌ {result['error']}")
+        return result
+
+    # 保存结果
+    saved = []
+    final = state.final_output
+    if not final:
+        result["error"] = "生成结果为空"
+        return result
+
+    if "xiaohongshu" in enabled_platforms:
+        f = save_markdown("xiaohongshu", final.xiaohongshu, note_output_dir)
+        saved.append(f)
+    if "gongzhonghao" in enabled_platforms:
+        f = save_markdown("gongzhonghao", final.gongzhonghao, note_output_dir)
+        saved.append(f)
+    if "douyin" in enabled_platforms:
+        f = save_markdown("douyin", final.douyin, note_output_dir)
+        saved.append(f)
+
+    print(f"   ✅ 已保存 {len(saved)} 个文件")
+
+    if final.recommended_tags:
+        print(f"\n   🏷️ 推荐标签/话题:")
+        for line in final.recommended_tags.strip().split("\n"):
+            if line.strip():
+                print(f"      {line.strip()}")
+
+    # 生成小红书配图
+    if "xiaohongshu" in enabled_platforms:
+        try:
+            renderer = XiaohongshuRenderer()
+            html_path = renderer.render(final.xiaohongshu, note_output_dir / "配图")
+            print(f"   🎨 配图已生成: {Path(html_path).name}")
+        except Exception as e:
+            print(f"   ⚠️ 配图生成失败: {e}")
+
+    # 持久化任务状态
+    try:
+        save_task(state)
+    except Exception as e:
+        print(f"   ⚠️ 任务状态保存失败: {e}")
+
+    result["success"] = True
+    result["saved_files"] = saved
+    return result
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -296,8 +398,21 @@ def main():
         choices=["duckduckgo", "tavily"],
         help="搜索引擎选择（默认: duckduckgo，无需 API key）"
     )
+    parser.add_argument(
+        "--v2",
+        action="store_true",
+        help="使用新架构（Orchestrator + Multi-Agent）运行"
+    )
 
     args = parser.parse_args()
+
+    # Phase 0: 初始化 SQLite
+    if HAS_NEW_ARCH:
+        try:
+            from agents.store import init_db
+            init_db()
+        except Exception as e:
+            print(f"⚠️ 数据库初始化失败: {e}")
 
     # 1. 确定输入
     if args.input:
@@ -379,15 +494,24 @@ def main():
 
         print(f"\n📊 进度: {idx}/{len(note_files)}")
 
-        result = process_single_note(
-            note_path=note_path or Path("default"),
-            raw_notes=raw_notes,
-            agent=agent,
-            checker=checker,
-            enabled_platforms=enabled_platforms,
-            args=args,
-            note_output_dir=note_output_dir,
-        )
+        if args.v2 and HAS_NEW_ARCH:
+            result = process_single_note_v2(
+                note_path=note_path or Path("default"),
+                raw_notes=raw_notes,
+                enabled_platforms=enabled_platforms,
+                args=args,
+                note_output_dir=note_output_dir,
+            )
+        else:
+            result = process_single_note(
+                note_path=note_path or Path("default"),
+                raw_notes=raw_notes,
+                agent=agent,
+                checker=checker,
+                enabled_platforms=enabled_platforms,
+                args=args,
+                note_output_dir=note_output_dir,
+            )
         results.append(result)
 
     # 5. 总结

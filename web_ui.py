@@ -61,6 +61,7 @@ from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
 from content_agent.html_renderer import XiaohongshuRenderer
 
+from ui.tabs import config_tab
 
 # ==================== 配置管理 ====================
 
@@ -290,6 +291,17 @@ def on_vault_refresh(vault_path: str):
 def on_vault_select(vault_path: str, rel_path: str) -> str:
     """选择笔记库文件后读取内容"""
     return read_vault_file(vault_path.strip(), rel_path)
+
+
+def on_file_upload(file_path):
+    """上传文件后自动读取内容到 note_input"""
+    if file_path is None:
+        return ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"❌ 读取文件失败: {e}"
 
 
 # ==================== kuaifa 发布配置 ====================
@@ -1209,162 +1221,7 @@ with gr.Blocks(
                         )
 
         with gr.Tab("⚙️ 配置"):
-            with gr.Row():
-                with gr.Column(scale=1):
-                    # ── 模型配置 ──
-                    with gr.Accordion("⚙️ 模型配置（第一次使用请先填写）", open=False) as config_accordion:
-                        config_status = gr.Textbox(
-                            label="状态",
-                            value=get_config_status()[1],
-                            interactive=False,
-                        )
-
-                        provider_select = gr.Dropdown(
-                            label="选择 Provider",
-                            choices=[
-                                ("DeepSeek (推荐，性价比最高)", "deepseek"),
-                                ("Kimi (月之暗面)", "kimi"),
-                                ("MiniMax", "minimax"),
-                                ("OpenAI / Azure", "openai"),
-                                ("自定义 OpenAI-compatible", "custom"),
-                            ],
-                            value=load_config_for_ui()["provider"],
-                        )
-
-                        # 各 Provider 的 Key 输入（password 隐藏）
-                        deepseek_key_input = gr.Textbox(
-                            label="DeepSeek API Key",
-                            placeholder="sk-...",
-                            type="password",
-                            value=load_config_for_ui()["deepseek_key"],
-                            visible=load_config_for_ui()["provider"] == "deepseek",
-                        )
-                        kimi_key_input = gr.Textbox(
-                            label="Kimi API Key",
-                            placeholder="sk-...",
-                            type="password",
-                            value=load_config_for_ui()["kimi_key"],
-                            visible=load_config_for_ui()["provider"] == "kimi",
-                        )
-                        minimax_key_input = gr.Textbox(
-                            label="MiniMax API Key",
-                            placeholder="your-minimax-api-key",
-                            type="password",
-                            value=load_config_for_ui()["minimax_key"],
-                            visible=load_config_for_ui()["provider"] == "minimax",
-                        )
-                        openai_key_input = gr.Textbox(
-                            label="OpenAI API Key",
-                            placeholder="sk-...",
-                            type="password",
-                            value=load_config_for_ui()["openai_key"],
-                            visible=load_config_for_ui()["provider"] == "openai",
-                        )
-
-                        # 自定义平台扩展字段
-                        with gr.Column(visible=load_config_for_ui()["provider"] == "custom") as custom_fields:
-                            custom_key_input = gr.Textbox(
-                                label="API Key",
-                                placeholder="sk-...",
-                                type="password",
-                                value=load_config_for_ui()["custom_key"],
-                            )
-                            custom_base_url_input = gr.Textbox(
-                                label="Base URL",
-                                placeholder="https://api.example.com/v1",
-                                value=load_config_for_ui()["custom_base_url"],
-                            )
-                            custom_model_name_input = gr.Textbox(
-                                label="Model Name",
-                                placeholder="deepseek-ai/DeepSeek-V3",
-                                value=load_config_for_ui()["custom_model_name"],
-                            )
-                            gr.Markdown("""
-                            常见平台参考：
-                            - 硅基流动: `https://api.siliconflow.cn/v1` + `deepseek-ai/DeepSeek-V3`
-                            - 通义千问: `https://dashscope.aliyuncs.com/compatible-mode/v1` + `qwen-plus`
-                            - 智谱: `https://open.bigmodel.cn/api/paas/v4` + `glm-4-flash`
-                            - Ollama: `http://localhost:11434/v1` + `qwen2.5:7b`
-                            """)
-
-                        # ── Tavily 搜索引擎 Key ──
-                        gr.Markdown("---")
-                        tavily_key_input = gr.Textbox(
-                            label="Tavily API Key（搜索增强用，可选）",
-                            placeholder="tvly-... （选填，用 Tavily 搜索时需要）",
-                            type="password",
-                            value=load_config_for_ui()["tavily_key"],
-                        )
-                        gr.Markdown("注册: [https://app.tavily.com/home](https://app.tavily.com/home) 免费 1000 credits/月")
-
-                        save_config_btn = gr.Button("💾 保存配置", variant="primary", size="sm")
-
-                    # ── Provider 切换时显示/隐藏对应的 Key 输入框 ──
-                    def _toggle_provider_inputs(provider):
-                        return {
-                            deepseek_key_input: gr.update(visible=provider == "deepseek"),
-                            kimi_key_input: gr.update(visible=provider == "kimi"),
-                            minimax_key_input: gr.update(visible=provider == "minimax"),
-                            openai_key_input: gr.update(visible=provider == "openai"),
-                            custom_fields: gr.update(visible=provider == "custom"),
-                        }
-
-                    provider_select.change(
-                        fn=_toggle_provider_inputs,
-                        inputs=[provider_select],
-                        outputs=[deepseek_key_input, kimi_key_input, minimax_key_input, openai_key_input, custom_fields],
-                    )
-
-                    save_config_btn.click(
-                        fn=save_config,
-                        inputs=[
-                            provider_select,
-                            deepseek_key_input,
-                            kimi_key_input,
-                            minimax_key_input,
-                            openai_key_input,
-                            custom_key_input,
-                            custom_base_url_input,
-                            custom_model_name_input,
-                            tavily_key_input,
-                        ],
-                        outputs=[config_status],
-                    )
-
-                with gr.Column(scale=1):
-                    # —— kuaifa 发布配置 ——
-                    with gr.Accordion("🔧 发布配置（kuaifa 微信公众号）", open=False):
-                        kf_cfg = load_kuaifa_config()
-                        kuaifa_status = gr.Textbox(
-                            label="状态",
-                            value=get_kuaifa_setup_status(),
-                            interactive=False,
-                        )
-                        kuaifa_appid = gr.Textbox(
-                            label="微信 AppID",
-                            placeholder="wx...",
-                            value=kf_cfg.get("appid", ""),
-                        )
-                        kuaifa_appsecret = gr.Textbox(
-                            label="微信 AppSecret",
-                            placeholder="微信公众号的 AppSecret",
-                            type="password",
-                            value=kf_cfg.get("appsecret", ""),
-                        )
-                        kuaifa_api_key = gr.Textbox(
-                            label="kuaifa API Key",
-                            placeholder="kuaifa_...",
-                            type="password",
-                            value=kf_cfg.get("api-key", ""),
-                        )
-                        kuaifa_author = gr.Textbox(
-                            label="默认作者名",
-                            placeholder="如：小爪",
-                            value=kf_cfg.get("default-author", ""),
-                        )
-                        with gr.Row():
-                            save_kuaifa_btn = gr.Button("💾 保存发布配置", variant="primary", size="sm")
-                            verify_kuaifa_btn = gr.Button("🔐 验证微信配置", size="sm")
+            config_tab.create_tab(save_config_fn=save_config)
 
             gr.Markdown("### ⏰ 定时任务管理")
             gr.Markdown("每个任务绑定一个具体笔记文件（如 `notes/daily.md`），到点后自动生成文案。也可以填写目录，会处理目录下所有笔记。")
@@ -1696,18 +1553,6 @@ with gr.Blocks(
         return "", "", "", [], datetime.now().strftime("%Y-%m-%d"), "", "草稿", "表单已清空"
 
     # 事件绑定
-    # —— kuaifa 发布配置绑定 ——
-    save_kuaifa_btn.click(
-        fn=save_kuaifa_config,
-        inputs=[kuaifa_appid, kuaifa_appsecret, kuaifa_api_key, kuaifa_author],
-        outputs=[kuaifa_status],
-    )
-    verify_kuaifa_btn.click(
-        fn=verify_kuaifa_config,
-        inputs=[],
-        outputs=[kuaifa_status],
-    )
-
     # 笔记库事件绑定
     vault_save_btn.click(
         fn=on_vault_save,
@@ -1722,6 +1567,11 @@ with gr.Blocks(
     vault_file_select.change(
         fn=on_vault_select,
         inputs=[vault_path_input, vault_file_select],
+        outputs=[note_input],
+    )
+    file_input.change(
+        fn=on_file_upload,
+        inputs=[file_input],
         outputs=[note_input],
     )
 
