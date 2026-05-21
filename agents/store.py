@@ -15,7 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
-_SCHEMA_VERSION = 3
+_SCHEMA_VERSION = 4
 
 
 def _ensure_db():
@@ -38,6 +38,43 @@ def _get_schema_version() -> int:
         return 1
     finally:
         conn.close()
+
+
+def _column_exists(table: str, column: str) -> bool:
+    conn = _get_conn()
+    try:
+        conn.execute(f"SELECT {column} FROM {table} LIMIT 1")
+        return True
+    except sqlite3.OperationalError:
+        return False
+    finally:
+        conn.close()
+
+
+def migrate_publish_queue_v2():
+    """publish_queue 增加排期和重试字段"""
+    conn = _get_conn()
+    text_columns = ["scheduled_at", "error_log", "gate_decision", "gate_reason"]
+    for col in text_columns:
+        if not _column_exists("publish_queue", col):
+            conn.execute(f"ALTER TABLE publish_queue ADD COLUMN {col} TEXT")
+    if not _column_exists("publish_queue", "retry_count"):
+        conn.execute("ALTER TABLE publish_queue ADD COLUMN retry_count INTEGER DEFAULT 0")
+    conn.commit()
+    conn.close()
+
+
+def init_publish_queue_migration():
+    migrate_publish_queue_v2()
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_queue_scheduled ON publish_queue(scheduled_at);
+        CREATE INDEX IF NOT EXISTS idx_queue_status_retry ON publish_queue(status, retry_count);
+        """
+    )
+    conn.commit()
+    conn.close()
 
 
 def _set_schema_version(version: int):
@@ -240,6 +277,7 @@ def init_db():
 
     # 增量初始化新表（不破坏已有数据）
     init_publish_queue_table()
+    init_publish_queue_migration()
     init_style_samples_table()
     init_content_metrics_table()
     init_style_profiles_table()

@@ -429,16 +429,86 @@ def _handle_agent_mode(args):
             print(f"❌ 未找到: {args.reject}")
         return
 
+    # ---- P2: 审核门 + 自动发布 ----
+    gate_mode = args.gate_mode
+    if args.skip_gate:
+        print("\n⚠️⚠️⚠️  WARNING: --skip-gate 已设置，审核门被强制禁用！⚠️⚠️⚠️\n")
+        gate_mode = "disabled"
+
     if args.publish_next:
+        from automation import PublishExecutor, PublishGate
         item = PublishQueue.get_oldest_approved()
         if item is None:
             print("📭 没有 approved 状态的队列项")
             return
-        print(f"🚀 将发布到 {item.platform}: {item.title or '无标题'}")
-        print(f"   内容长度: {len(item.content)} 字")
-        print(f"   (P0: 仅标记为已发布，实际发布在 P1 实现)")
-        PublishQueue.mark_published(item.id, result="P0 manual publish")
-        print(f"✅ 已标记为 published: {item.id}")
+        executor = PublishExecutor(gate=PublishGate(mode=gate_mode), max_retries=args.max_retries)
+        result = executor.execute_one(item.id)
+        if result.get("success"):
+            print(f"✅ 发布成功: {item.id}")
+        else:
+            print(f"❌ 发布失败: {result.get('error', '未知错误')}")
+        return
+
+    if args.publish_all:
+        from automation import PublishExecutor, PublishGate
+        items = PublishQueue.list(status="approved")
+        if not items:
+            print("📭 没有 approved 状态的队列项")
+            return
+        gate = PublishGate(mode=gate_mode)
+        decisions = gate.batch_review(items)
+        executor = PublishExecutor(gate=gate, max_retries=args.max_retries)
+        for item, decision in zip(items, decisions):
+            if decision.decision != "approve":
+                print(f"⏭️  跳过 {item.id}: {decision.decision}")
+                continue
+            print(f"🚀 发布 {item.id} ({item.platform})...")
+            result = executor.execute_one(item.id, skip_gate=True)
+            if result.get("success"):
+                print(f"   ✅ 成功")
+            else:
+                print(f"   ❌ 失败: {result.get('error', '未知错误')}")
+        return
+
+    if args.publish_scheduled:
+        from automation import PublishExecutor, PublishGate
+        # publish_scheduled 强制使用 scheduled 模式，不允许 disabled 绕过审核
+        executor = PublishExecutor(
+            gate=PublishGate(mode="scheduled"),
+            max_retries=args.max_retries,
+        )
+        results = executor.execute_scheduled()
+        success = sum(1 for r in results if r.get("success"))
+        print(f"\n✅ 成功: {success}/{len(results)}")
+        return
+
+    if args.schedule:
+        if not args.schedule_at:
+            print("❌ 请同时提供 --at 参数指定排期时间")
+            return
+        ok = PublishQueue.update_schedule(args.schedule, args.schedule_at)
+        print(f"{'✅ 已排期' if ok else '❌ 未找到'}: {args.schedule} -> {args.schedule_at}")
+        return
+
+    if args.unschedule:
+        ok = PublishQueue.unschedule(args.unschedule)
+        print(f"{'✅ 已取消排期' if ok else '❌ 未找到'}: {args.unschedule}")
+        return
+
+    if args.retry_failed:
+        from automation import PublishExecutor, PublishGate
+        items = PublishQueue.get_failed_items(max_retries=args.max_retries)
+        if not items:
+            print("📭 没有需要重试的 failed 项")
+            return
+        executor = PublishExecutor(gate=PublishGate(mode=gate_mode), max_retries=args.max_retries)
+        for item in items:
+            print(f"🔄 重试 {item.id} ({item.platform})...")
+            result = executor.execute_one(item.id)
+            if result.get("success"):
+                print(f"   ✅ 成功")
+            else:
+                print(f"   ❌ 失败: {result.get('error', '未知错误')}")
         return
 
     # ---- P1: 数据回流 + 风格画像 ----
@@ -617,7 +687,16 @@ def main():
     parser.add_argument("--status", default="pending", help="队列筛选状态")
     parser.add_argument("--approve", metavar="ID", help="审核通过指定队列项")
     parser.add_argument("--reject", metavar="ID", help="拒绝指定队列项")
-    parser.add_argument("--publish-next", action="store_true", help="手动发布下一个 approved 项")
+    parser.add_argument("--publish-next", action="store_true", help="交互式审核并发布下一个 approved 项")
+    parser.add_argument("--publish-all", action="store_true", help="批量审核并发布所有 approved 项")
+    parser.add_argument("--publish-scheduled", action="store_true", help="执行到期的排期发布")
+    parser.add_argument("--schedule", metavar="ID", help="为队列项设置排期时间")
+    parser.add_argument("--at", metavar="TIME", dest="schedule_at", help="排期时间，如 '2026-05-25 09:00'")
+    parser.add_argument("--unschedule", metavar="ID", help="取消排期")
+    parser.add_argument("--gate-mode", default="interactive", choices=["interactive", "scheduled", "disabled"], help="审核门模式")
+    parser.add_argument("--skip-gate", action="store_true", help="开发调试：跳过审核门（打印警告）")
+    parser.add_argument("--retry-failed", action="store_true", help="重试所有 failed 状态的项")
+    parser.add_argument("--max-retries", type=int, default=3, help="最大重试次数")
 
     # P1: Agent 智能优化
     parser.add_argument("--import-metrics", metavar="PATH", help="导入平台数据 CSV/JSON")
@@ -649,7 +728,9 @@ def main():
     # ---- Agent Mode 处理 ----
     agent_args = [
         args.watch, args.process_inbox, args.queue, args.approve, args.reject,
-        args.publish_next, args.import_metrics, args.analyze_feedback,
+        args.publish_next, args.publish_all, args.publish_scheduled,
+        args.schedule, args.unschedule, args.retry_failed,
+        args.import_metrics, args.analyze_feedback,
         args.show_profile, args.pick_topics, args.topics, args.accept_topic,
         args.reject_topic, args.generate_ab, args.ab_results,
     ]

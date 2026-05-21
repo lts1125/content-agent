@@ -12,6 +12,10 @@ from automation.style_profile import StyleProfile, StyleSample
 from automation.feedback_agent import FeedbackAgent, ContentMetrics, StyleProfileRecord
 from automation.topic_picker import TopicPicker
 from automation.ab_test_framework import ABTestFramework, ABTestVariant
+from automation.gate import PublishGate, GateDecision
+from automation.executor import PublishExecutor
+from automation.retry import RetryPolicy
+from automation.xiaohongshu_publisher import XiaohongshuPublisher
 
 __all__ = [
     "VaultWatcher",
@@ -26,4 +30,9 @@ __all__ = [
     "TopicPicker",
     "ABTestFramework",
     "ABTestVariant",
+    "PublishGate",
+    "GateDecision",
+    "PublishExecutor",
+    "RetryPolicy",
+    "XiaohongshuPublisher",
 ]

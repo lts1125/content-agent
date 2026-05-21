@@ -20,12 +20,17 @@ class QueueItem:
     title: str
     content: str
     tags: str
-    status: Literal["pending", "approved", "published", "rejected"]
+    status: Literal["pending", "approved", "published", "rejected", "failed"]
     note_source: str
     created_at: str
     reviewed_at: Optional[str]
     published_at: Optional[str]
     publish_result: Optional[str]
+    scheduled_at: Optional[str] = None
+    retry_count: int = 0
+    error_log: Optional[str] = None
+    gate_decision: Optional[str] = None
+    gate_reason: Optional[str] = None
 
 
 class PublishQueue:
@@ -138,6 +143,42 @@ class PublishQueue:
             return None
         return _row_to_item(row)
 
+    @staticmethod
+    def update_schedule(item_id: str, scheduled_at: str) -> bool:
+        conn = _get_conn()
+        cur = conn.execute(
+            "UPDATE publish_queue SET scheduled_at = ? WHERE id = ?",
+            (scheduled_at, item_id),
+        )
+        conn.commit()
+        conn.close()
+        return cur.rowcount > 0
+
+    @staticmethod
+    def unschedule(item_id: str) -> bool:
+        conn = _get_conn()
+        cur = conn.execute(
+            "UPDATE publish_queue SET scheduled_at = NULL WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+        conn.close()
+        return cur.rowcount > 0
+
+    @staticmethod
+    def get_failed_items(max_retries: int = 3) -> List[QueueItem]:
+        conn = _get_conn()
+        rows = conn.execute(
+            """
+            SELECT * FROM publish_queue
+            WHERE status = 'failed' AND retry_count < ?
+            ORDER BY created_at ASC
+            """,
+            (max_retries,),
+        ).fetchall()
+        conn.close()
+        return [_row_to_item(r) for r in rows]
+
 
 def _row_to_item(row) -> QueueItem:
     return QueueItem(
@@ -153,6 +194,11 @@ def _row_to_item(row) -> QueueItem:
         reviewed_at=row["reviewed_at"],
         published_at=row["published_at"],
         publish_result=row["publish_result"],
+        scheduled_at=row["scheduled_at"] if "scheduled_at" in row.keys() else None,
+        retry_count=row["retry_count"] if "retry_count" in row.keys() else 0,
+        error_log=row["error_log"] if "error_log" in row.keys() else None,
+        gate_decision=row["gate_decision"] if "gate_decision" in row.keys() else None,
+        gate_reason=row["gate_reason"] if "gate_reason" in row.keys() else None,
     )
 
 
