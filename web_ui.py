@@ -61,6 +61,9 @@ from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
 from content_agent.html_renderer import XiaohongshuRenderer
 
+from agents.schemas import TaskInput
+from agents.orchestrator import Orchestrator
+
 from ui.tabs import config_tab
 
 # ==================== 配置管理 ====================
@@ -221,9 +224,10 @@ def save_config(provider, deepseek_key, kimi_key, minimax_key, openai_key,
     _write_env_file(env)
 
     # 清除 Agent 缓存，下次调用会使用新配置
-    global _agent, _checker
+    global _agent, _checker, _orchestrator
     _agent = None
     _checker = None
+    _orchestrator = None
 
     ok, msg = get_config_status()
     return msg
@@ -469,6 +473,7 @@ def _scale_html(html: str, scale: float = 0.48) -> str:
 _agent = None
 _checker = None
 _scheduler = None
+_orchestrator = None
 
 
 def _get_agent():
@@ -483,6 +488,13 @@ def _get_checker():
     if _checker is None:
         _checker = QualityChecker(_get_agent().model)
     return _checker
+
+
+def _get_orchestrator():
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = Orchestrator()
+    return _orchestrator
 
 
 def generate_content(note_text, note_file, platforms, enable_research, search_engine, style, batch_mode, history, progress=gr.Progress()):
@@ -573,6 +585,7 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     all_gongzhonghao = []
     all_douyin = []
     all_tags = []
+    orchestrator_states = []
 
     for idx, single_note in enumerate(notes_list, 1):
         base_progress = (idx - 1) / len(notes_list)
@@ -602,36 +615,30 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
 
         styled_notes = current_notes + style_note if style_note else current_notes
 
-        # 生成 + 质检
+        # 生成 + 质检（通过 Orchestrator）
         progress(base_progress + 0.1, desc=f"笔记 {idx}: 生成中...")
         generation_result = None
+        state = None
 
-        for attempt in range(1, 4):
-            try:
-                generation_result = agent.run(styled_notes)
-            except Exception as e:
-                generation_result = None
-                print(f"笔记 {idx} Agent 调用失败: {e}")
-                break
-
-            progress(base_progress + 0.1 + attempt * 0.05, desc=f"笔记 {idx}: 质检第 {attempt} 次...")
-
-            check = checker.check(
-                generation_result.xiaohongshu,
-                generation_result.gongzhonghao,
-                generation_result.douyin,
-                attempt=attempt,
+        try:
+            task_input = TaskInput(
+                note_text=styled_notes,
+                note_source=note_file or "clipboard",
+                platforms=list(enabled),
+                enable_research=False,  # 搜索增强已在外层处理
+                search_engine=search_engine,
+                style=style,
+                batch_mode=False,
             )
-
-            if check.passed:
-                break
-
-            if attempt < 3:
-                styled_notes = (
-                    f"【请根据以下改进要求重新输出三平台文案】\n"
-                    f"{check.retry_suggestion}\n\n"
-                    f"--- 原始笔记 ---\n{single_note}"
-                )
+            orchestrator = _get_orchestrator()
+            state = orchestrator.run(task_input)
+            generation_result = state.final_output
+            orchestrator_states.append(state)
+        except Exception as e:
+            generation_result = None
+            print(f"笔记 {idx} Orchestrator 调用失败: {e}")
+            import traceback
+            traceback.print_exc()
 
         if generation_result is None:
             xs = gh = dy = "❌ 生成失败"
@@ -690,7 +697,34 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
     }
     history = [entry] + (history if history else [])[:9]
 
-    status = f"✅ 完成！共 {len(notes_list)} 篇 | 平台: {', '.join(platforms)} | 耗时请参考页面状态栏"
+    # 构建状态文本
+    status_parts = [f"✅ 完成！共 {len(notes_list)} 篇 | 平台: {', '.join(platforms)}"]
+
+    # 显示 Orchestrator 编辑循环详情
+    total_llm_calls = sum((st.metadata.get("llm_calls", 0) for st in orchestrator_states if st), 0)
+    total_duration = sum((st.metadata.get("duration_sec", 0) for st in orchestrator_states if st), 0)
+    human_review_count = sum((1 for st in orchestrator_states if st and st.metadata.get("human_review_needed")), 0)
+    token_exceeded_count = sum((1 for st in orchestrator_states if st and st.metadata.get("token_budget_exceeded")), 0)
+
+    if total_llm_calls:
+        status_parts.append(f"LLM调用:{total_llm_calls}次")
+    if total_duration:
+        status_parts.append(f"耗时:{total_duration:.1f}s")
+    if human_review_count:
+        status_parts.append(f"⚠️{human_review_count}篇3次编辑未达标，取最佳稿")
+    if token_exceeded_count:
+        status_parts.append(f"⚠️{token_exceeded_count}篇Token预算超出")
+
+    # 单篇笔记时显示详细建议
+    edit_notes = ""
+    if len(notes_list) == 1 and orchestrator_states and orchestrator_states[0]:
+        st = orchestrator_states[0]
+        if st.edit_history:
+            last_v = st.edit_history[-1]
+            if last_v.suggestions and not last_v.passed:
+                edit_notes = chr(10) + "编辑建议:" + chr(10) + chr(10).join(f"  • {s}" for s in last_v.suggestions[:3])
+
+    status = " | ".join(status_parts) + edit_notes
     if sensitive_check and sensitive_check["has_sensitive"]:
         hits = [h["word"] for h in sensitive_check["hits"][:5]]
         warn = f"⚠️ 检测到{sensitive_check['local_count']}个敏感/违规词: {', '.join(hits)}"
