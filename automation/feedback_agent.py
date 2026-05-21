@@ -122,6 +122,14 @@ class FeedbackAgent:
     @staticmethod
     def _parse_json(file_path: Path) -> List[dict]:
         with open(file_path, "r", encoding="utf-8") as f:
+            if file_path.suffix.lower() == ".jsonl":
+                rows = []
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    rows.append(json.loads(line))
+                return rows
             data = json.load(f)
         if isinstance(data, list):
             return data
@@ -184,7 +192,8 @@ class FeedbackAgent:
 
         for pf in target_platforms:
             pf_rows = [s for s in scored if s[1].platform == pf]
-            if not pf_rows:
+            if len(pf_rows) < 3:
+                print(f"[FeedbackAgent] 平台 '{pf}' 样本不足 ({len(pf_rows)} 条)，跳过分析")
                 continue
             pf_rows.sort(key=lambda x: x[2], reverse=True)
             top_n = max(1, len(pf_rows) // 3)

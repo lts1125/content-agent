@@ -71,7 +71,7 @@ class TopicPicker:
                 search_engine="duckduckgo",
                 max_results=5,
                 verbose=False,
-                keywords=keywords.split(",") if "," in keywords else None,
+                keywords=[k.strip() for k in keywords.split(",")] if "," in keywords else None,
             )
         except Exception as e:
             print(f"[TopicPicker] 搜索热点失败: {e}")
