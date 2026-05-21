@@ -102,16 +102,31 @@ python main.py -i notes/my_note.md -r
 python main.py -i notes/my_note.md -r --search-engine tavily
 ```
 
-**完整 CLI 参数：**
+**Agent Mode（自动化工作流）：**
 
+```bash
+# 启动 Vault 监听，自动处理新放入的笔记
+python main.py --watch
+
+# 批量处理 inbox 下已有文件（处理完即退出）
+python main.py --process-inbox
+
+# 查看待发队列
+python main.py --queue
+python main.py --queue --status approved
+
+# 审核通过 / 拒绝
+python main.py --approve queue_xxx
+python main.py --reject queue_xxx
+
+# 手动发布下一个已审核项
+python main.py --publish-next
 ```
--i, --input        输入的笔记文件路径 (.md 或 .txt)
--o, --output       输出目录 (默认: output)
--p, --platforms    平台选择，逗号分隔 (默认: all)
--c, --clean        清理同一天的旧文件后再生成
--r, --research     启用搜索增强，自动搜索相关背景资料
---search-engine    搜索引擎选择 (默认: duckduckgo，可选: tavily)
-```
+
+> Agent Mode 依赖环境变量 `VAULT_PATH`（默认 `~/.content_agent/vault`），
+> 监听 `$VAULT_PATH/inbox/` 目录下的 `.md`/`.txt` 文件，处理完后自动归档到 `processed/` 或 `failed/`。
+
+> 更多参数见 `python main.py --help`。
 
 输出按日期分目录存放：
 
@@ -142,26 +157,11 @@ python web_ui.py
 
 然后打开浏览器访问 `http://127.0.0.1:7860`。
 
-**界面功能：**
-- 粘贴或上传笔记文件（支持批量多篇，`———` 分隔）
-- 多选平台（小红书/公众号/抖音）
-- 4 种风格切换（专业干货 / 轻松口语 / 情绪共鸣 / 悬忶钩子）
-- 搜索增强开关（DuckDuckGo / Tavily）
-- 实时生成进度条
-- 小红书 HTML 卡片实时预览
-- 标签/话题推荐（可直接复制使用）
-- 一键复制文案
-- 一键导出 Markdown / Word
-- 标题 A/B 测试（为每个平台生成 3 个备选标题）
-- 配图 Prompt 生成（可复制到 Midjourney/通义万相/即梦）
-- 敏感词预检（生成前自动检测，状态栏提示）
-- 历史记录恢复（最近 10 条）
-- 再改一版（输入修改指令重新生成）
-- **定时任务**（Cron 风格调度，自动生成文案）
-- **内容日历**（发布计划管理，状态跟踪：草稿 → 已排期 → 已生成 → 已发布）
-- **公众号一键发布到草稿箱**（通过 [kuaifa](https://github.com/shirenchuang/kuaifa) CLI，支持封面、摘要、作者）
-- **kuaifa 发布配置**（Web UI 内直接配置 AppID / AppSecret / API Key）
-- 模型配置（页面内直接填写 API Key）
+**界面功能概览：**
+- **生成**：粘贴/上传笔记、多平台选择、风格切换、搜索增强、实时预览
+- **辅助**：标题 A/B 测试、配图 Prompt 生成、敏感词预检、历史恢复
+- **工作流**：定时任务（Cron 调度）、内容日历（发布计划跟踪）、公众号一键发布（通过 [kuaifa](https://github.com/shirenchuang/kuaifa) CLI）
+- **导出**：一键复制、Markdown / Word 导出
 
 ---
 
@@ -181,6 +181,18 @@ python web_ui.py
 │   ├── sensitive_checker.py     # 敏感词预检（本地词表 + 可选百度API）
 │   ├── calendar.py              # 内容日历管理（发布计划、状态跟踪）
 │   └── publisher.py             # 多平台发布（当前支持微信公众号草稿箱）
+├── automation/                  # P0: Agent 化自动运行层
+│   ├── vault_watcher.py         # Vault 目录监听（watchdog）
+│   ├── agent_controller.py      # 自动触发 Orchestrator
+│   ├── publish_queue.py         # 待发队列（pending → approved → published）
+│   └── style_profile.py         # 风格画像样本收集
+├── agents/                      # Multi-Agent 架构
+│   ├── orchestrator.py          # 任务调度器
+│   ├── writer_agent.py          # 文案生成
+│   ├── editor_agent.py          # 质量审稿
+│   ├── research_agent.py        # 搜索增强
+│   ├── publisher_agent.py       # 发布执行
+│   └── schemas.py               # 数据模型
 ├── scripts/
 │   ├── build_app.py             # PyInstaller 打包脚本（macOS 桌面端）
 │   ├── test_app.py              # 打包后验证脚本
@@ -230,15 +242,6 @@ python main.py -i notes/你的笔记.md
 
 ---
 
-## 踩坑记录（真实）
-
-1. **PydanticAI 0.8 API 变动大**：`OpenAIModel` 改名为 `OpenAIChatModel`，`base_url` 不能直传，需用 Provider 包装
-2. **结果字段名变化**：`result.data` → `result.output`
-3. **Kimi Code API 限制**：有 User-Agent 白名单，非官方客户端（如本脚本）无法调用。Kimi Code key 只能用于 Kimi CLI、Claude Code 等特定工具。如需在本项目中使用 Kimi，需另外申请 Moonshot 开放平台的 API key
-4. **结构化输出参数名**：PydanticAI 使用 `output_type` 而非 `result_type`
-
----
-
 ## Roadmap
 
 ### P1 — 核心功能（已完成）
@@ -265,6 +268,11 @@ python main.py -i notes/你的笔记.md
 - [x] 定时任务 / Cron 调度
 - [x] 内容日历管理
 - [x] 微信公众号一键发布到草稿箱（通过 [kuaifa](https://github.com/shirenchuang/kuaifa) CLI）
+
+### P3 — Agent 化（已完成）
+- [x] Vault 监听自动触发（watchdog）
+- [x] 待发队列管理（pending → approved → published）
+- [x] 风格画像样本收集
 
 ---
 

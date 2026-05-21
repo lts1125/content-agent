@@ -15,6 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
+_SCHEMA_VERSION = 2
 
 
 def _ensure_db():
@@ -26,6 +27,74 @@ def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _get_schema_version() -> int:
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        return row["version"] if row else 1
+    except sqlite3.OperationalError:
+        return 1
+    finally:
+        conn.close()
+
+
+def _set_schema_version(version: int):
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO schema_version (version) VALUES (?) ON CONFLICT(version) DO UPDATE SET version=excluded.version",
+        (version,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_publish_queue_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS publish_queue (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            title TEXT,
+            content TEXT,
+            tags TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            note_source TEXT,
+            created_at TEXT,
+            reviewed_at TEXT,
+            published_at TEXT,
+            publish_result TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_queue_status ON publish_queue(status);
+        CREATE INDEX IF NOT EXISTS idx_queue_created ON publish_queue(created_at);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_style_samples_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS style_samples (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            note_source TEXT,
+            note_preview TEXT,
+            platform TEXT NOT NULL,
+            content_preview TEXT,
+            content_length INTEGER,
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_samples_task ON style_samples(task_id);
+        """
+    )
+    conn.commit()
+    conn.close()
 
 
 def init_db():
@@ -72,10 +141,21 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(created_at);
+
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY
+        );
         """
     )
     conn.commit()
     conn.close()
+
+    # 增量初始化新表（不破坏已有数据）
+    init_publish_queue_table()
+    init_style_samples_table()
+
+    # 更新 schema 版本
+    _set_schema_version(_SCHEMA_VERSION)
 
 
 def _research_to_dict(r: Optional[ResearchResult]) -> Optional[dict]:

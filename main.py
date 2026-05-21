@@ -19,6 +19,8 @@ import sys
 from pathlib import Path
 from typing import List
 
+from dotenv import load_dotenv
+
 from content_agent.agent_core import ContentAgent
 from content_agent.html_renderer import XiaohongshuRenderer
 from content_agent.quality_checker import QualityChecker
@@ -32,6 +34,8 @@ try:
 except Exception as e:
     HAS_NEW_ARCH = False
     _import_err = e
+
+load_dotenv()
 
 
 DEFAULT_NOTES = """背景：下班后决定学 AI Agent 开发，想做一个内容改写 Agent 做副业。
@@ -353,6 +357,91 @@ def process_single_note_v2(
     return result
 
 
+def _handle_agent_mode(args):
+    """处理 Agent 模式 CLI 参数"""
+    import shutil
+
+    from automation import VaultWatcher, AgentController, PublishQueue
+
+    vault_path = os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
+    inbox_dir = os.getenv("VAULT_INBOX", "inbox")
+
+    if args.watch:
+        if not os.path.isdir(vault_path):
+            print(f"❌ Vault 路径不存在: {vault_path}")
+            sys.exit(1)
+        watcher = VaultWatcher(vault_path=vault_path, inbox_dir=inbox_dir)
+        controller = AgentController(watcher=watcher)
+        watcher.on_new_note = controller.on_new_note
+        try:
+            watcher.start()
+        except KeyboardInterrupt:
+            print("\n👋 停止监听")
+            watcher.stop()
+        return
+
+    if args.process_inbox:
+        watcher = VaultWatcher(vault_path=vault_path, inbox_dir=inbox_dir)
+        controller = AgentController(watcher=watcher)
+        inbox_path = Path(vault_path) / inbox_dir
+        if not inbox_path.exists():
+            print("⚠️ inbox 目录不存在，自动创建")
+            inbox_path.mkdir(parents=True, exist_ok=True)
+        files = [f for f in inbox_path.iterdir() if f.is_file() and f.suffix.lower() in (".md", ".txt")]
+        if not files:
+            print("📭 inbox 为空，没有文件需要处理")
+            sys.exit(0)
+        print(f"📁 发现 {len(files)} 个文件，开始批量处理...")
+        results = controller.process_inbox(inbox_path)
+        success = sum(1 for r in results if r["success"])
+        print(f"\n✅ 成功: {success}/{len(results)}")
+        for r in results:
+            if not r["success"]:
+                print(f"   ❌ {r.get('error', '未知错误')}")
+        return
+
+    if args.queue:
+        items = PublishQueue.list(status=args.status)
+        if not items:
+            print(f"📭 队列中无 '{args.status}' 状态的项目")
+            return
+        print(f"\n{'ID':<20} {'Platform':<12} {'Status':<10} {'Title'}")
+        print("-" * 70)
+        for item in items:
+            title = item.title[:30] + "..." if len(item.title) > 30 else item.title
+            print(f"{item.id:<20} {item.platform:<12} {item.status:<10} {title}")
+        print(f"\n共 {len(items)} 条")
+        return
+
+    if args.approve:
+        ok = PublishQueue.approve(args.approve)
+        if ok:
+            print(f"✅ 已通过: {args.approve}")
+        else:
+            print(f"❌ 未找到: {args.approve}")
+        return
+
+    if args.reject:
+        ok = PublishQueue.reject(args.reject)
+        if ok:
+            print(f"✅ 已拒绝: {args.reject}")
+        else:
+            print(f"❌ 未找到: {args.reject}")
+        return
+
+    if args.publish_next:
+        item = PublishQueue.get_oldest_approved()
+        if item is None:
+            print("📭 没有 approved 状态的队列项")
+            return
+        print(f"🚀 将发布到 {item.platform}: {item.title or '无标题'}")
+        print(f"   内容长度: {len(item.content)} 字")
+        print(f"   (P0: 仅标记为已发布，实际发布在 P1 实现)")
+        PublishQueue.mark_published(item.id, result="P0 manual publish")
+        print(f"✅ 已标记为 published: {item.id}")
+        return
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Content Agent - AI 内容改写工具",
@@ -404,6 +493,15 @@ def main():
         help="使用新架构（Orchestrator + Multi-Agent）运行"
     )
 
+    agent_group = parser.add_mutually_exclusive_group()
+    agent_group.add_argument("--watch", action="store_true", help="启动 Vault 监听模式")
+    agent_group.add_argument("--process-inbox", action="store_true", help="批量处理 inbox 后退出")
+    parser.add_argument("--queue", action="store_true", help="查看待发队列")
+    parser.add_argument("--status", default="pending", help="队列筛选状态")
+    parser.add_argument("--approve", metavar="ID", help="审核通过指定队列项")
+    parser.add_argument("--reject", metavar="ID", help="拒绝指定队列项")
+    parser.add_argument("--publish-next", action="store_true", help="手动发布下一个 approved 项")
+
     args = parser.parse_args()
 
     # Phase 0: 初始化 SQLite
@@ -413,6 +511,14 @@ def main():
             init_db()
         except Exception as e:
             print(f"⚠️ 数据库初始化失败: {e}")
+
+    # ---- Agent Mode 处理 ----
+    if args.watch or args.process_inbox or args.queue or args.approve or args.reject or args.publish_next:
+        if not HAS_NEW_ARCH:
+            print(f"❌ Agent 模式不可用: {_import_err}")
+            sys.exit(1)
+        _handle_agent_mode(args)
+        return
 
     # 1. 确定输入
     if args.input:
