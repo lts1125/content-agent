@@ -431,13 +431,28 @@ Hermes Cronjob → python main.py --publish-scheduled --gate-mode scheduled
 
 ## 11. MVP Checklist
 
-1. [ ] 实现 `PublishGate`：interactive / scheduled / disabled 三种模式
-2. [ ] 实现 `PublishExecutor`：分发到微信公众号 + 小红书
-3. [ ] 实现 `XiaohongshuPublisher`：半自动方案 B
-4. [ ] 实现 `RetryPolicy`：指数退避 + 关键词判断
-5. [ ] 扩展 DB：publish_queue 加 5 个字段
-6. [ ] 扩展 CLI：--publish-all / --publish-scheduled / --schedule / --gate-mode / --retry-failed
+1. [x] 实现 `PublishGate`：interactive / scheduled / disabled 三种模式
+2. [x] 实现 `PublishExecutor`：分发到微信公众号 + 小红书
+3. [x] 实现 `XiaohongshuPublisher`：半自动方案 B
+4. [x] 实现 `RetryPolicy`：指数退避 + 关键词判断
+5. [x] 扩展 DB：publish_queue 加 5 个字段
+6. [x] 扩展 CLI：--publish-all / --publish-scheduled / --schedule / --gate-mode / --retry-failed
 7. [ ] 端到端测试：生成文案 → 审核 → 发布公众号草稿箱
+
+## 13. 实现笔记
+
+**2026-05-21**
+
+- 审核门安全约束：
+  - `disabled` 模式仅通过 `--skip-gate` 显式触发，打印大写 WARNING
+  - `--publish-scheduled` 硬编码使用 `scheduled` 模式，不允许 `disabled` 绕过
+  - `publish_all` 先 `batch_review` 再 `execute_one(..., skip_gate=True)`，避免用户被问两次
+- 重试策略：
+  - `_record_failure` 内递归重试时直接调用 `_dispatch(item)`，不走 gate
+  - `should_retry()` 在重试前被调用，非重试类错误（blocked/banned/forbidden 等）直接终止
+- DB 迁移：
+  - 使用 `_column_exists()` 检查列是否存在，避免重复 `ALTER TABLE`
+  - `retry_count` 单独处理为 `INTEGER DEFAULT 0`，其余为 `TEXT`
 
 ---
 
