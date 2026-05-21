@@ -84,14 +84,33 @@ class Orchestrator:
     # 受控生成-编辑循环
     # ------------------------------------------------------------------
     def _write_edit_loop(self, state: TaskState, inp: TaskInput) -> TaskState:
-        """Writer → Editor 循环，最多 3 轮"""
+        """Writer → Editor 循环，最多 3 轮；如果 skip_edit 为 True，只生成初稿不审稿"""
         llm_calls = 0
         raw_notes = self._build_writer_input(state, inp)
+
+        # ---- 快速模式：只出初稿，跳过 Editor ----
+        if inp.skip_edit:
+            draft = self.writer_agent.run(
+                raw_notes,
+                platforms=inp.platforms,
+                style=inp.style,
+                concurrent=inp.concurrent_mode,
+            )
+            state.drafts.append(draft)
+            state.final_output = draft
+            state.status = "done"
+            state.metadata["llm_calls"] = 1
+            return state
 
         for attempt in range(1, MAX_EDIT_LOOPS + 1):
             # ---- Writer ----
             if attempt == 1:
-                draft = self.writer_agent.run(raw_notes, platforms=inp.platforms, style=inp.style)
+                draft = self.writer_agent.run(
+                    raw_notes,
+                    platforms=inp.platforms,
+                    style=inp.style,
+                    concurrent=inp.concurrent_mode,
+                )
             else:
                 last_verdict = state.edit_history[-1]
                 draft = self.writer_agent.refine(
@@ -99,6 +118,7 @@ class Orchestrator:
                     verdict=last_verdict,
                     raw_notes=raw_notes,
                     platforms=inp.platforms,
+                    concurrent=inp.concurrent_mode,
                 )
             state.drafts.append(draft)
             llm_calls += 1

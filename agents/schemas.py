@@ -25,6 +25,8 @@ class TaskInput:
     search_engine: str = "duckduckgo"        # duckduckgo | tavily
     style: str = "default"                   # 风格画像标识
     batch_mode: bool = False
+    concurrent_mode: bool = False            # 是否平台级并发生成
+    skip_edit: bool = False                  # 是否跳过 Editor 自动修改循环
 
 
 @dataclass
@@ -66,13 +68,11 @@ class ResearchResult(BaseModel):
 class WriterOutput(BaseModel):
     """WriterAgent 输出
 
-    方案 B：包装现有的 MultiPlatformContent，不替换它。
-    content_agent/ 的工具函数继续接收 MultiPlatformContent，
-    agents/ 的业务层在 WriterOutput 上扩展 revision_notes。
+    方案 B：平台字段默认为空字符串，便于 PlatformWriterAgent 合并结果。
     """
-    xiaohongshu: str
-    gongzhonghao: str
-    douyin: str
+    xiaohongshu: str = ""
+    gongzhonghao: str = ""
+    douyin: str = ""
     recommended_tags: str = ""
     revision_notes: str = ""                 # 本轮修改说明
 

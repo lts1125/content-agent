@@ -213,6 +213,16 @@ with gr.Blocks(
                             value=False,
                         )
 
+                        concurrent_mode = gr.Checkbox(
+                            label="⚡ 并发生成（平台级并行 + 批量并行，更快但耗费更多 token）",
+                            value=False,
+                        )
+
+                        skip_edit = gr.Checkbox(
+                            label="🚀 快速生成（跳过自动编辑优化，1次 LLM 出稿，更快但质量略低）",
+                            value=False,
+                        )
+
                     generate_btn = gr.Button("🚀 生成三平台文案", variant="primary", size="lg")
 
                     status_text = gr.Textbox(
@@ -327,7 +337,9 @@ with gr.Blocks(
                                 douyin_titles = gr.Markdown("点击上方按钮生成")
 
                         gr.Markdown("### 🎨 配图 Prompt 生成")
-                        cover_prompt_btn = gr.Button("🖼️ 生成小红书封面配图 Prompt", variant="secondary")
+                        with gr.Row():
+                            cover_prompt_btn_xhs = gr.Button("📱 生成小红书封面 Prompt", variant="secondary")
+                            cover_prompt_btn_gzh = gr.Button("📰 生成公众号封面 Prompt", variant="secondary")
                         cover_prompt_output = gr.Textbox(
                             label="绘画 Prompt（可复制到 Midjourney/通义万相/即梦）",
                             lines=10,
@@ -699,6 +711,8 @@ with gr.Blocks(
             search_engine,
             style_radio,
             batch_mode,
+            concurrent_mode,
+            skip_edit,
             history_state,
         ],
         outputs=[
@@ -751,9 +765,15 @@ with gr.Blocks(
         ],
     )
 
-    cover_prompt_btn.click(
-        fn=generate_cover_prompt,
+    cover_prompt_btn_xhs.click(
+        fn=lambda text: generate_cover_prompt(text, platform="xiaohongshu"),
         inputs=[xiaohongshu_output],
+        outputs=[cover_prompt_output, status_text],
+    )
+
+    cover_prompt_btn_gzh.click(
+        fn=lambda text: generate_cover_prompt(text, platform="gongzhonghao"),
+        inputs=[gongzhonghao_output],
         outputs=[cover_prompt_output, status_text],
     )
 

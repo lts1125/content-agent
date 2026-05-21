@@ -490,7 +490,7 @@ def on_template_delete(template_id):
 
 # ==================== 生成核心逻辑 ====================
 
-def generate_content(note_text, note_file, platforms, enable_research, search_engine, style, batch_mode, history, progress=gr.Progress()):
+def generate_content(note_text, note_file, platforms, enable_research, search_engine, style, batch_mode, concurrent_mode, skip_edit, history, progress=gr.Progress()):
     ok, config_msg = get_config_status()
     if not ok:
         yield "", "", "", "", "", config_msg, history
@@ -560,20 +560,11 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
 
     yield "", "", "", "", "", "⏳ 正在初始化 Agent，请稍候...", history
 
-    all_xiaohongshu = []
-    all_gongzhonghao = []
-    all_douyin = []
-    all_tags = []
-    orchestrator_states = []
-
-    for idx, single_note in enumerate(notes_list, 1):
-        base_progress = (idx - 1) / len(notes_list)
-        progress(base_progress, desc=f"处理第 {idx}/{len(notes_list)} 篇...")
-
-        current_notes = single_note
-
+    # ---- 单篇生成逻辑（可被并发调用）----
+    def _process_single(idx: int, single_note: str) -> dict:
+        state = None
+        generation_result = None
         if enable_research:
-            progress(base_progress + 0.05, desc=f"笔记 {idx}: 搜索增强...")
             try:
                 from pydantic_ai import Agent
                 keyword_agent = Agent(
@@ -590,12 +581,11 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
                 )
             except Exception as e:
                 print(f"笔记 {idx} 搜索增强失败: {e}")
+                current_notes = single_note
+        else:
+            current_notes = single_note
 
         styled_notes = current_notes + style_note if style_note else current_notes
-
-        progress(base_progress + 0.1, desc=f"笔记 {idx}: 生成中...")
-        generation_result = None
-        state = None
 
         try:
             task_input = TaskInput(
@@ -606,11 +596,12 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
                 search_engine=search_engine,
                 style=style,
                 batch_mode=False,
+                concurrent_mode=concurrent_mode,
+                skip_edit=skip_edit,
             )
             orchestrator = _get_orchestrator()
             state = orchestrator.run(task_input)
             generation_result = state.final_output
-            orchestrator_states.append(state)
         except Exception as e:
             generation_result = None
             print(f"笔记 {idx} Orchestrator 调用失败: {e}")
@@ -625,6 +616,52 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             gh = generation_result.gongzhonghao if "gongzhonghao" in enabled else "（未选择此平台）"
             dy = generation_result.douyin if "douyin" in enabled else "（未选择此平台）"
             tag = generation_result.recommended_tags or ""
+
+        return {
+            "idx": idx,
+            "note": single_note,
+            "xs": xs,
+            "gh": gh,
+            "dy": dy,
+            "tag": tag,
+            "state": state,
+        }
+
+    # ---- 并行处理 ----
+    if batch_mode and concurrent_mode and len(notes_list) > 1:
+        progress(0.1, desc=f"并发处理 {len(notes_list)} 篇笔记...")
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(notes_list), 3)) as executor:
+            futures = {
+                executor.submit(_process_single, i + 1, n): i
+                for i, n in enumerate(notes_list)
+            }
+            results = [None] * len(notes_list)
+            for future in futures:
+                res = future.result()
+                results[res["idx"] - 1] = res
+    else:
+        results = []
+        for idx, single_note in enumerate(notes_list, 1):
+            base_progress = (idx - 1) / len(notes_list)
+            progress(base_progress, desc=f"处理第 {idx}/{len(notes_list)} 篇...")
+            res = _process_single(idx, single_note)
+            results.append(res)
+
+    # ---- 合并结果 ----
+    all_xiaohongshu = []
+    all_gongzhonghao = []
+    all_douyin = []
+    all_tags = []
+    orchestrator_states = []
+
+    for res in results:
+        idx = res["idx"]
+        single_note = res["note"]
+        xs, gh, dy, tag = res["xs"], res["gh"], res["dy"], res["tag"]
+        state = res.get("state")
+        if state:
+            orchestrator_states.append(state)
 
         all_tags.append(tag)
 
@@ -865,21 +902,40 @@ def generate_titles(xiaohongshu, gongzhonghao, douyin, note_text, style, progres
     return results["小红书"], results["公众号"], results["抖音"], "✅ 备选标题生成完成"
 
 
-def generate_cover_prompt(xiaohongshu, progress=gr.Progress()):
-    if not xiaohongshu or xiaohongshu == "（未选择此平台）":
-        return "⚠️ 请先生成小红书文案", ""
+def generate_cover_prompt(content, platform="xiaohongshu", progress=gr.Progress()):
+    if not content or content == "（未选择此平台）":
+        platform_name = "小红书" if platform == "xiaohongshu" else "公众号"
+        return f"⚠️ 请先生成{platform_name}文案", ""
 
     progress(0.3, desc="准备配图 prompt...")
     agent = _get_agent()
 
     from pydantic_ai import Agent as PydanticAgent
 
-    cover_agent = PydanticAgent(
-        agent.model,
-        system_prompt="你是一位专业的 AI 绘画提示词工程师，擅长根据文案内容生成高质量的小红书封面图绘画 prompt。",
-    )
+    if platform == "gongzhonghao":
+        system = "你是一位专业的 AI 绘画提示词工程师，擅长根据文案内容生成高质量的公众号封面图绘画 prompt。"
+        user_prompt = f"""请根据以下公众号文章，生成一个适合作为公众号封面图的 AI 绘画 prompt。
 
-    prompt = f"""请根据以下小红书文案，生成一个适合作为小红书封面图的 AI 绘画 prompt。
+要求：
+- 画面风格：专业、大气、适合科技/学习类公众号，色彩稳重有质感
+- 构图：适合 16:9 横版比例（公众号封面），主体突出，留出标题位置
+- 可以包含与主题相关的图像元素，但不要出现具体文字字符
+- 提供中文画面描述和英文 Midjourney 风格 prompt
+- Midjourney prompt 需包含风格参数（如 --ar 16:9）
+
+文案内容：
+{content[:1200]}
+
+请严格按以下格式输出：
+【画面描述】
+（用一段话描述画面内容、色彩、氛围、构图，强调公众号封面的专业感）
+
+【Midjourney Prompt】
+（英文关键词组成的 prompt，结尾带 --ar 16:9 等参数）
+"""
+    else:
+        system = "你是一位专业的 AI 绘画提示词工程师，擅长根据文案内容生成高质量的小红书封面图绘画 prompt。"
+        user_prompt = f"""请根据以下小红书文案，生成一个适合作为小红书封面图的 AI 绘画 prompt。
 
 要求：
 - 画面风格：清新、现代、适合科技/学习类内容，色彩明快
@@ -889,7 +945,7 @@ def generate_cover_prompt(xiaohongshu, progress=gr.Progress()):
 - Midjourney prompt 需包含风格参数（如 --ar 3:4）
 
 文案内容：
-{xiaohongshu[:1200]}
+{content[:1200]}
 
 请严格按以下格式输出：
 【画面描述】
@@ -899,14 +955,20 @@ def generate_cover_prompt(xiaohongshu, progress=gr.Progress()):
 （英文关键词组成的 prompt，结尾带 --ar 3:4 等参数）
 """
 
+    cover_agent = PydanticAgent(
+        agent.model,
+        system_prompt=system,
+    )
+
     try:
-        r = cover_agent.run_sync(prompt)
+        r = cover_agent.run_sync(user_prompt)
         result = r.output.strip()
     except Exception as e:
         return f"生成失败: {e}", ""
 
     progress(1.0, desc="完成")
-    return result, "✅ 配图 prompt 生成完成，可复制到 Midjourney/通义万相/即梦 等工具"
+    platform_label = "公众号" if platform == "gongzhonghao" else "小红书"
+    return result, f"✅ {platform_label}封面 prompt 生成完成，可复制到 Midjourney/通义万相/即梦 等工具"
 
 
 # ==================== 导出功能 ====================
