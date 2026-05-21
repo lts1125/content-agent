@@ -15,7 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 
 
 def _ensure_db():
@@ -97,6 +97,94 @@ def init_style_samples_table():
     conn.close()
 
 
+def init_content_metrics_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS content_metrics (
+            id TEXT PRIMARY KEY,
+            queue_item_id TEXT,
+            platform TEXT NOT NULL,
+            reads INTEGER DEFAULT 0,
+            likes INTEGER DEFAULT 0,
+            shares INTEGER DEFAULT 0,
+            comments INTEGER DEFAULT 0,
+            collects INTEGER DEFAULT 0,
+            import_date TEXT,
+            publish_date TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_metrics_queue ON content_metrics(queue_item_id);
+        CREATE INDEX IF NOT EXISTS idx_metrics_platform ON content_metrics(platform);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_style_profiles_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS style_profiles (
+            id TEXT PRIMARY KEY,
+            platform TEXT NOT NULL,
+            preferred_tone TEXT,
+            high_performing_patterns TEXT,
+            avg_score INTEGER,
+            sample_count INTEGER,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_style_platform ON style_profiles(platform);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_topic_suggestions_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS topic_suggestions (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            note_file TEXT,
+            trending_topic TEXT,
+            platforms TEXT,
+            reason TEXT,
+            priority INTEGER DEFAULT 3,
+            status TEXT DEFAULT 'pending',
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_topics_status ON topic_suggestions(status);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_ab_test_variants_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ab_test_variants (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            variant_type TEXT NOT NULL,
+            variant_content TEXT,
+            status TEXT DEFAULT 'pending',
+            metrics_id TEXT,
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_ab_task ON ab_test_variants(task_id);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def init_db():
     """初始化表结构（幂等）"""
     conn = _get_conn()
@@ -153,6 +241,10 @@ def init_db():
     # 增量初始化新表（不破坏已有数据）
     init_publish_queue_table()
     init_style_samples_table()
+    init_content_metrics_table()
+    init_style_profiles_table()
+    init_topic_suggestions_table()
+    init_ab_test_variants_table()
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)

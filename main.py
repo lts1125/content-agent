@@ -363,7 +363,7 @@ def _handle_agent_mode(args):
 
     from automation import VaultWatcher, AgentController, PublishQueue
 
-    vault_path = os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
+    vault_path = args.vault or os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
     inbox_dir = os.getenv("VAULT_INBOX", "inbox")
 
     if args.watch:
@@ -441,6 +441,123 @@ def _handle_agent_mode(args):
         print(f"✅ 已标记为 published: {item.id}")
         return
 
+    # ---- P1: 数据回流 + 风格画像 ----
+    if args.import_metrics:
+        from automation import FeedbackAgent
+        agent = FeedbackAgent()
+        result = agent.import_metrics(Path(args.import_metrics))
+        print(f"📊 导入完成: {result['imported']} 条")
+        if result["errors"]:
+            print(f"⚠️ 错误: {len(result['errors'])} 条")
+            for e in result["errors"][:5]:
+                print(f"   {e}")
+        return
+
+    if args.analyze_feedback:
+        from automation import FeedbackAgent
+        agent = FeedbackAgent()
+        profiles = agent.analyze(platform=args.platform)
+        if profiles:
+            for profile in profiles:
+                print(f"\n🎨 风格画像 ({profile.platform})")
+                print(f"   语气: {profile.preferred_tone}")
+                print(f"   高分模式: {', '.join(profile.high_performing_patterns)}")
+                print(f"   平均分: {profile.avg_score}")
+                print(f"   样本数: {profile.sample_count}")
+        else:
+            print("⚠️ 无足够数据进行分析（需要已发布项 + metrics）")
+        return
+
+    if args.show_profile:
+        from automation import FeedbackAgent
+        agent = FeedbackAgent()
+        target = args.platform or "xiaohongshu"
+        profile = agent.get_profile(target)
+        if profile:
+            print(f"\n🎨 风格画像 ({profile.platform})")
+            print(f"   语气: {profile.preferred_tone}")
+            print(f"   高分模式: {', '.join(profile.high_performing_patterns)}")
+            print(f"   平均分: {profile.avg_score}")
+            print(f"   样本数: {profile.sample_count}")
+        else:
+            print(f"⚠️ 平台 '{target}' 暂无风格画像")
+        return
+
+    # ---- P1: 自动选题 ----
+    if args.pick_topics:
+        from automation import TopicPicker
+        picker = TopicPicker()
+        keywords = args.topic_keywords or os.getenv("AGENT_TOPIC_KEYWORDS")
+        suggestions = picker.pick_topics(vault_path=vault_path, keywords=keywords)
+        if suggestions:
+            print(f"\n💡 生成 {len(suggestions)} 条选题建议:")
+            for s in suggestions:
+                print(f"   • [{s.priority}] {s.title} ({s.trending_topic})")
+        else:
+            print("⚠️ 未生成选题建议")
+        return
+
+    if args.topics:
+        from automation import TopicPicker
+        picker = TopicPicker()
+        items = picker.list_suggestions(status=args.topic_status)
+        if not items:
+            print(f"📭 无 '{args.topic_status}' 状态的选题建议")
+            return
+        print(f"\n{'Title':<40} {'Status':<10} {'Priority'}")
+        print("-" * 65)
+        for item in items:
+            title = item.title[:35] + "..." if len(item.title) > 35 else item.title
+            print(f"{title:<40} {item.status:<10} {item.priority}")
+        print(f"\n共 {len(items)} 条")
+        return
+
+    if args.accept_topic:
+        from automation import TopicPicker
+        ok = TopicPicker().accept(args.accept_topic)
+        print(f"{'✅ 已接受' if ok else '❌ 未找到'}: {args.accept_topic}")
+        return
+
+    if args.reject_topic:
+        from automation import TopicPicker
+        ok = TopicPicker().reject(args.reject_topic)
+        print(f"{'✅ 已拒绝' if ok else '❌ 未找到'}: {args.reject_topic}")
+        return
+
+    # ---- P1: A/B 测试 ----
+    if args.generate_ab:
+        from automation import ABTestFramework, PublishQueue
+        framework = ABTestFramework()
+        types = [t.strip() for t in args.generate_ab.split(",")]
+        queue_id = args.ab_queue_id
+        if not queue_id:
+            # 取最近的 pending/approved 项
+            items = PublishQueue.list(status="pending")
+            if not items:
+                items = PublishQueue.list(status="approved")
+            if not items:
+                print("❌ 没有可用的队列项，请用 --ab-queue-id 指定")
+                return
+            queue_id = items[0].id
+        try:
+            variants = framework.generate_variants(queue_id, types, count=args.ab_count)
+            print(f"✅ 为 {queue_id} 生成 {len(variants)} 个变体:")
+            for v in variants:
+                print(f"   [{v.variant_type}] {v.variant_content[:60]}...")
+        except Exception as e:
+            print(f"❌ 生成失败: {e}")
+        return
+
+    if args.ab_results:
+        from automation import ABTestFramework
+        result = ABTestFramework().analyze_results(args.ab_results)
+        if result["best_variant_id"]:
+            print(f"🏆 最优变体: {result['best_variant_id']}")
+            print(f"   最佳得分: {result['best_score']}")
+        else:
+            print("⚠️ 无结果数据")
+        return
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -502,6 +619,23 @@ def main():
     parser.add_argument("--reject", metavar="ID", help="拒绝指定队列项")
     parser.add_argument("--publish-next", action="store_true", help="手动发布下一个 approved 项")
 
+    # P1: Agent 智能优化
+    parser.add_argument("--import-metrics", metavar="PATH", help="导入平台数据 CSV/JSON")
+    parser.add_argument("--analyze-feedback", action="store_true", help="分析反馈并更新风格画像")
+    parser.add_argument("--show-profile", action="store_true", help="查看当前风格画像")
+    parser.add_argument("--platform", help="指定平台（用于 --analyze-feedback / --show-profile）")
+    parser.add_argument("--vault", help="Vault 路径（默认读取 VAULT_PATH 环境变量）")
+    parser.add_argument("--pick-topics", action="store_true", help="从 Vault 自动生成选题建议")
+    parser.add_argument("--topic-keywords", help="选题热点关键词（默认读取 AGENT_TOPIC_KEYWORDS）")
+    parser.add_argument("--topics", action="store_true", help="查看选题建议")
+    parser.add_argument("--topic-status", default="pending", help="选题建议筛选状态")
+    parser.add_argument("--accept-topic", metavar="ID", help="接受选题建议")
+    parser.add_argument("--reject-topic", metavar="ID", help="拒绝选题建议")
+    parser.add_argument("--generate-ab", metavar="TYPES", help="生成 A/B 变体，如 title,hook")
+    parser.add_argument("--ab-count", type=int, default=3, help="每种变体类型生成数量")
+    parser.add_argument("--ab-queue-id", help="指定队列项 ID 生成 A/B 变体")
+    parser.add_argument("--ab-results", metavar="TASK_ID", help="查看 A/B 测试结果")
+
     args = parser.parse_args()
 
     # Phase 0: 初始化 SQLite
@@ -513,7 +647,13 @@ def main():
             print(f"⚠️ 数据库初始化失败: {e}")
 
     # ---- Agent Mode 处理 ----
-    if args.watch or args.process_inbox or args.queue or args.approve or args.reject or args.publish_next:
+    agent_args = [
+        args.watch, args.process_inbox, args.queue, args.approve, args.reject,
+        args.publish_next, args.import_metrics, args.analyze_feedback,
+        args.show_profile, args.pick_topics, args.topics, args.accept_topic,
+        args.reject_topic, args.generate_ab, args.ab_results,
+    ]
+    if any(agent_args):
         if not HAS_NEW_ARCH:
             print(f"❌ Agent 模式不可用: {_import_err}")
             sys.exit(1)

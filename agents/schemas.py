@@ -106,9 +106,12 @@ class StyleProfile(BaseModel):
 
 class TopicSuggestion(BaseModel):
     """TopicPicker 输出的选题建议"""
+    id: str = ""
     title: str
     note_file: str
     trending_topic: str
     platforms: List[str]
     reason: str
     priority: int = 3                        # 1-5
+    status: str = "pending"                  # pending | accepted | rejected | generated
+    created_at: str = ""
