@@ -16,6 +16,8 @@ from automation.gate import PublishGate, GateDecision
 from automation.executor import PublishExecutor
 from automation.retry import RetryPolicy
 from automation.xiaohongshu_publisher import XiaohongshuPublisher
+from automation.config import SchedulerConfig
+from automation.scheduler import TaskScheduler
 
 __all__ = [
     "VaultWatcher",
@@ -35,4 +37,6 @@ __all__ = [
     "PublishExecutor",
     "RetryPolicy",
     "XiaohongshuPublisher",
+    "SchedulerConfig",
+    "TaskScheduler",
 ]

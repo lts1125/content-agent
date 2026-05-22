@@ -1,0 +1,9 @@
+pydantic-ai
+pydantic
+duckduckgo-search
+python-dotenv
+docx
+python-docx
+watchdog
+apscheduler
+pyyaml

@@ -16,6 +16,7 @@ import argparse
 import datetime
 import os
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -400,6 +401,27 @@ def _handle_agent_mode(args):
                 print(f"   ❌ {r.get('error', '未知错误')}")
         return
 
+    # ---- B1: 自触发调度 ----
+    if args.schedule_once:
+        from automation import TaskScheduler, SchedulerConfig
+        config = SchedulerConfig.from_yaml(args.config) if args.config else SchedulerConfig.from_env()
+        scheduler = TaskScheduler(config)
+        scheduler.run_once()
+        return
+
+    if args.daemon:
+        from automation import TaskScheduler, SchedulerConfig
+        config = SchedulerConfig.from_yaml(args.config) if args.config else SchedulerConfig.from_env()
+        scheduler = TaskScheduler(config)
+        scheduler.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n👋 停止调度器")
+            scheduler.shutdown()
+        return
+
     if args.queue:
         items = PublishQueue.list(status=args.status)
         if not items:
@@ -683,6 +705,9 @@ def main():
     agent_group = parser.add_mutually_exclusive_group()
     agent_group.add_argument("--watch", action="store_true", help="启动 Vault 监听模式")
     agent_group.add_argument("--process-inbox", action="store_true", help="批量处理 inbox 后退出")
+    agent_group.add_argument("--schedule-once", action="store_true", help="单次执行调度任务（扫描+生成+发布）")
+    agent_group.add_argument("--daemon", action="store_true", help="常驻后台运行调度器")
+    parser.add_argument("--config", type=str, help="调度配置文件路径（YAML）")
     parser.add_argument("--queue", action="store_true", help="查看待发队列")
     parser.add_argument("--status", default="pending", help="队列筛选状态")
     parser.add_argument("--approve", metavar="ID", help="审核通过指定队列项")
@@ -727,7 +752,8 @@ def main():
 
     # ---- Agent Mode 处理 ----
     agent_args = [
-        args.watch, args.process_inbox, args.queue, args.approve, args.reject,
+        args.watch, args.process_inbox, args.schedule_once, args.daemon,
+        args.queue, args.approve, args.reject,
         args.publish_next, args.publish_all, args.publish_scheduled,
         args.schedule, args.unschedule, args.retry_failed,
         args.import_metrics, args.analyze_feedback,
