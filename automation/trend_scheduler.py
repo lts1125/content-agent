@@ -91,8 +91,11 @@ class TrendScheduler:
             print(f"  • {item.title} {tag} (来源: {item.source})")
 
         # 生成选题建议
-        trending_hint = self._build_trending_hint(unique_matched)
-        suggestions = self._generate_suggestions(trending_hint)
+        if unique_matched:
+            trending_hint = self._build_trending_hint(unique_matched)
+            suggestions = self._generate_suggestions(trending_hint)
+        else:
+            suggestions = []
 
         return {
             "checked": True,
@@ -127,22 +130,12 @@ class TrendScheduler:
         vault_path = os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
 
         try:
-            # 扩展 TopicPicker.pick_topics 支持 trending_hint 参数
-            # 如果当前版本不支持，降级为普通调用
-            import inspect
-            sig = inspect.signature(self._picker.pick_topics)
-            if "trending_hint" in sig.parameters:
-                suggestions = self._picker.pick_topics(
-                    vault_path=vault_path,
-                    keywords=self._get_keywords()[0] if self._get_keywords() else None,
-                    trending_hint=trending_hint,
-                )
-            else:
-                print("[TrendScheduler] 当前 TopicPicker 不支持 trending_hint，降级调用")
-                suggestions = self._picker.pick_topics(
-                    vault_path=vault_path,
-                    keywords=self._get_keywords()[0] if self._get_keywords() else None,
-                )
+            keywords = self._get_keywords()
+            suggestions = self._picker.pick_topics(
+                vault_path=vault_path,
+                keywords=keywords[0] if keywords else None,
+                trending_hint=trending_hint,
+            )
             print(f"[TrendScheduler] 生成 {len(suggestions)} 条选题建议")
             return suggestions
         except Exception as e:

@@ -55,30 +55,45 @@ class TopicPicker:
         vault_path: str,
         keywords: Optional[str] = None,
         limit: int = 5,
+        trending_hint: Optional[str] = None,
     ) -> List[TopicSuggestion]:
-        """生成选题建议并保存到 DB"""
+        """
+        生成选题建议并保存到 DB
+
+        Args:
+            vault_path: Vault 目录路径
+            keywords: 搜索关键词
+            limit: 最多生成几条建议
+            trending_hint: 外部传入的热点文本（如热榜抓取结果），
+                          如果提供则跳过搜索，直接使用
+        """
         notes = self.scan_vault(vault_path)
         if not notes:
             print("[TopicPicker] Vault 中未找到笔记文件")
             return []
 
-        # 搜索热点
-        if keywords is None:
-            keywords = os.getenv("AGENT_TOPIC_KEYWORDS", "AI Agent, LLM, 大模型")
-        try:
-            trending = research_notes(
-                f"最近热点: {keywords}",
-                search_engine="duckduckgo",
-                max_results=5,
-                verbose=False,
-                keywords=[k.strip() for k in keywords.split(",")] if "," in keywords else None,
-            )
-        except Exception as e:
-            print(f"[TopicPicker] 搜索热点失败: {e}")
-            trending = ""
+        # 搜索热点（如果未提供 trending_hint）
+        if trending_hint:
+            trending = trending_hint
+            print(f"[TopicPicker] 使用外部热点提示，长度 {len(trending)} 字符")
+        else:
+            if keywords is None:
+                keywords = os.getenv("AGENT_TOPIC_KEYWORDS", "AI Agent, LLM, 大模型")
+            try:
+                kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if "," in keywords else []
+                trending = research_notes(
+                    f"最近热点: {keywords}",
+                    search_engine="duckduckgo",
+                    max_results=5,
+                    verbose=False,
+                    keywords=kw_list if kw_list else [],
+                )
+            except Exception as e:
+                print(f"[TopicPicker] 搜索热点失败: {e}")
+                trending = ""
 
         # 构建 prompt
-        prompt = self._build_prompt(notes, trending, keywords)
+        prompt = self._build_prompt(notes, trending, keywords or "AI Agent")
 
         # 调用 LLM
         try:
