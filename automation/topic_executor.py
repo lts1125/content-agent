@@ -38,82 +38,16 @@ class TopicExecutor:
         if topic["status"] != "accepted":
             return {"success": False, "error": f"选题状态不是 accepted: {topic['status']}"}
 
-        # 2. 读取对应笔记
-        note_path = self._resolve_note_path(topic["note_file"])
-        if not note_path or not note_path.exists():
-            return {"success": False, "error": f"笔记文件不存在: {topic['note_file']}"}
-
-        try:
-            raw_notes = note_path.read_text(encoding="utf-8")
-        except Exception as e:
-            return {"success": False, "error": f"读取笔记失败: {e}"}
-
-        # 3. 构建 TaskInput
+        # 2. 判断内容类型：笔记驱动 vs 热点驱动
         platforms = self._parse_platforms(topic.get("platforms", "[]"))
-        task_input = TaskInput(
-            note_text=raw_notes,
-            note_source=str(note_path),
-            platforms=platforms,
-            enable_research=False,  # 选题阶段已经做过搜索
-            skip_edit=True,         # 快速模式，跳过编辑循环
-        )
+        
+        # 如果有 trending_hint，说明是热点驱动，用热点内容生成
+        trending_hint = topic.get("trending_hint", "")
+        if trending_hint and "douyin" in platforms:
+            return self._execute_trending(topic, trending_hint, platforms)
 
-        # 4. 调用 Orchestrator 生成
-        try:
-            state = self.orch.run(task_input)
-        except Exception as e:
-            return {"success": False, "error": f"生成失败: {e}"}
-
-        final = state.final_output
-        if not final:
-            return {"success": False, "error": "生成结果为空"}
-
-        # 5. 入队 PublishQueue
-        queued = 0
-        content_dict = final.to_content_dict()
-        for platform in platforms:
-            text = content_dict.get(platform, "")
-            if not text:
-                continue
-            title = extract_title(text)
-            tags = final.recommended_tags or ""
-            try:
-                PublishQueue.add(
-                    task_id=state.task_id,
-                    platform=platform,
-                    title=title,
-                    content=text,
-                    tags=tags,
-                    note_source=str(note_path),
-                )
-                queued += 1
-            except Exception as e:
-                print(f"[TopicExecutor] 入队失败 [{platform}]: {e}")
-
-        # 6. 更新选题状态为 generated
-        self._mark_generated(topic_id, state.task_id)
-
-        # 7. 记录风格样本
-        try:
-            for platform in platforms:
-                text = content_dict.get(platform, "")
-                if text:
-                    StyleProfile.record_sample(
-                        task_id=state.task_id,
-                        note_source=str(note_path),
-                        note_text=raw_notes,
-                        platform=platform,
-                        content=text,
-                    )
-        except Exception as e:
-            print(f"[TopicExecutor] 记录风格样本失败: {e}")
-
-        return {
-            "success": True,
-            "task_id": state.task_id,
-            "queued": queued,
-            "error": None,
-        }
+        # 否则是笔记驱动（原有逻辑）
+        return self._execute_note(topic, platforms)
 
     def execute_batch(self, limit: int = 10) -> list[dict]:
         """
@@ -198,6 +132,166 @@ class TopicExecutor:
             return json.loads(platforms_str)
         except Exception:
             return ["xiaohongshu", "gongzhonghao", "douyin"]
+
+    # ------------------------------------------------------------------
+    # 笔记驱动（原有逻辑）
+    # ------------------------------------------------------------------
+    def _execute_note(self, topic: dict, platforms: list[str]) -> dict:
+        """基于笔记生成内容"""
+        note_path = self._resolve_note_path(topic["note_file"])
+        if not note_path or not note_path.exists():
+            return {"success": False, "error": f"笔记文件不存在: {topic['note_file']}"}
+
+        try:
+            raw_notes = note_path.read_text(encoding="utf-8")
+        except Exception as e:
+            return {"success": False, "error": f"读取笔记失败: {e}"}
+
+        task_input = TaskInput(
+            note_text=raw_notes,
+            note_source=str(note_path),
+            platforms=platforms,
+            enable_research=False,
+            skip_edit=True,
+        )
+
+        try:
+            state = self.orch.run(task_input)
+        except Exception as e:
+            return {"success": False, "error": f"生成失败: {e}"}
+
+        final = state.final_output
+        if not final:
+            return {"success": False, "error": "生成结果为空"}
+
+        queued = self._queue_content(state, final, platforms, str(note_path), raw_notes)
+        self._mark_generated(topic["id"], state.task_id)
+
+        return {
+            "success": True,
+            "task_id": state.task_id,
+            "queued": queued,
+            "error": None,
+        }
+
+    # ------------------------------------------------------------------
+    # 热点驱动（抖音图文）
+    # ------------------------------------------------------------------
+    def _execute_trending(self, topic: dict, trending_hint: str, platforms: list[str]) -> dict:
+        """基于热点生成抖音图文"""
+        from content_agent.douyin_renderer import DouyinRenderer
+        from agents.store import generate_task_id
+
+        # 1. 用 LLM 把热点扩展成结构化内容
+        content = self._generate_trending_content(trending_hint, topic["title"])
+        if not content:
+            return {"success": False, "error": "热点内容生成失败"}
+
+        # 2. 生成抖音图文 HTML
+        renderer = DouyinRenderer()
+        import uuid
+        task_id = f"task_{uuid.uuid4().hex[:12]}"
+        output_dir = Path("output/douyin") / task_id
+        output_dir.mkdir(parents=True, exist_ok=True)
+        html_path = renderer.render(content, output_dir)
+
+        # 3. 入队（抖音平台存 HTML 路径）
+        try:
+            PublishQueue.add(
+                task_id=task_id,
+                platform="douyin",
+                title=topic["title"],
+                content=content,
+                tags="AI,科技,资讯",
+                note_source=html_path,
+            )
+            queued = 1
+        except Exception as e:
+            print(f"[TopicExecutor] 入队失败 [douyin]: {e}")
+            queued = 0
+
+        self._mark_generated(topic["id"], task_id)
+
+        return {
+            "success": True,
+            "task_id": task_id,
+            "queued": queued,
+            "error": None,
+        }
+
+    def _generate_trending_content(self, trending_hint: str, title: str) -> str:
+        """用 LLM 把热点扩展成结构化内容"""
+        from pydantic_ai import Agent
+        import os
+
+        model = os.getenv("MODEL_PROVIDER", "deepseek")
+        agent = Agent(
+            model,
+            system_prompt="""你是一位科技资讯编辑，擅长把热点新闻改写成适合抖音图文的结构化内容。
+
+输出格式要求：
+1. 第一行：#标签（如 #AI资讯 #科技前沿）
+2. 第二行：空行
+3. 第三行：标题（一句话概括）
+4. 空行
+5. 用 "1. 2. 3." 分小节，每节配 2-4 个要点（用 "- " 开头）
+6. 最后一行：一句金句总结
+
+风格：简洁、有冲击力、适合快速阅读。""",
+        )
+
+        try:
+            result = agent.run_sync(
+                f"热点信息：{trending_hint}\n\n请根据这个热点，生成一篇抖音图文内容。标题：{title}"
+            )
+            return result.output
+        except Exception as e:
+            print(f"[TopicExecutor] LLM 生成热点内容失败: {e}")
+            # 兜底：直接返回热点信息
+            return f"#AI资讯\n\n{title}\n\n{trending_hint}\n\n关注获取更多科技资讯。"
+
+    # ------------------------------------------------------------------
+    # 公共方法
+    # ------------------------------------------------------------------
+    def _queue_content(self, state, final, platforms: list[str], note_path: str, raw_notes: str) -> int:
+        """将生成的内容入队"""
+        queued = 0
+        content_dict = final.to_content_dict()
+        for platform in platforms:
+            text = content_dict.get(platform, "")
+            if not text:
+                continue
+            title = extract_title(text)
+            tags = final.recommended_tags or ""
+            try:
+                PublishQueue.add(
+                    task_id=state.task_id,
+                    platform=platform,
+                    title=title,
+                    content=text,
+                    tags=tags,
+                    note_source=note_path,
+                )
+                queued += 1
+            except Exception as e:
+                print(f"[TopicExecutor] 入队失败 [{platform}]: {e}")
+
+        # 记录风格样本
+        try:
+            for platform in platforms:
+                text = content_dict.get(platform, "")
+                if text:
+                    StyleProfile.record_sample(
+                        task_id=state.task_id,
+                        note_source=note_path,
+                        note_text=raw_notes,
+                        platform=platform,
+                        content=text,
+                    )
+        except Exception as e:
+            print(f"[TopicExecutor] 记录风格样本失败: {e}")
+
+        return queued
 
 
 def demo():
