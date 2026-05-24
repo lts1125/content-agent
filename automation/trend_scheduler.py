@@ -19,7 +19,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from automation.config import SchedulerConfig
 from automation.topic_picker import TopicPicker
-from content_agent.trend_watcher import WeiboHotSource
+from content_agent.trend_watcher import WeiboHotSource, ZhihuHotSource, JuejinHotSource
 
 
 class TrendScheduler:
@@ -28,8 +28,24 @@ class TrendScheduler:
     def __init__(self, config: Optional[SchedulerConfig] = None):
         self.config = config or SchedulerConfig.from_env()
         self.scheduler = BackgroundScheduler()
-        self._sources = [WeiboHotSource()]
+        self._sources = self._init_sources()
         self._picker = TopicPicker()
+
+    def _init_sources(self) -> List:
+        """根据配置初始化热榜源"""
+        source_map = {
+            "weibo": WeiboHotSource,
+            "zhihu": ZhihuHotSource,
+            "juejin": JuejinHotSource,
+        }
+        sources = []
+        for name in getattr(self.config, "trend_sources", ["weibo"]):
+            cls = source_map.get(name)
+            if cls:
+                sources.append(cls())
+            else:
+                print(f"[TrendScheduler] 未知热榜源: {name}，跳过")
+        return sources
 
     # ------------------------------------------------------------------
     # 核心逻辑

@@ -10,5 +10,7 @@
 
 from content_agent.trend_watcher.base import TrendItem, TrendSource
 from content_agent.trend_watcher.weibo_hot import WeiboHotSource
+from content_agent.trend_watcher.zhihu_hot import ZhihuHotSource
+from content_agent.trend_watcher.juejin_hot import JuejinHotSource
 
-__all__ = ["TrendItem", "TrendSource", "WeiboHotSource"]
+__all__ = ["TrendItem", "TrendSource", "WeiboHotSource", "ZhihuHotSource", "JuejinHotSource"]
