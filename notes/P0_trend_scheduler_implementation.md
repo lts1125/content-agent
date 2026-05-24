@@ -10,6 +10,10 @@
 - 77e7953 feat: LLM 评估过滤热点，只跟进高质量匹配
 - dcb5b10 feat: 选题 accepted 后自动触发生成内容
 - 64678e9 fix: 修复LLM评估器误判技术趋势 + 封装热点流水线命令
+- 36978dd feat: RAG 向量检索（Chroma + BGE-small-zh），接入 TopicExecutor
+- 3a91691 fix: RAG 过滤逻辑修复，按文件名匹配排除当前笔记
+- d08c172 fix: RAG 双策略检索（内容+标题），增加调试输出
+- 4f792b2 fix: RAG 三问题修复（本地模型加载 + PersistentClient + 自动索引）
 
 ## 新增模块
 
@@ -105,6 +109,19 @@ python main.py --accept-topic topic_xxx
 - 问题：TopicPicker 生成的 `note_file` 是相对路径，TopicExecutor 找不到
 - 解决：TopicExecutor._resolve_note_path() 增加递归查找，匹配文件名
 
+### 6. RAG 检索失效（三连击）
+- **问题1：BGE 联网卡住**
+  - 现象：`SentenceTransformer('BAAI/bge-small-zh-v1.5')` 每次都要访问 HuggingFace，离线时抛错被 TopicExecutor 吞掉，表现为 RAG 内容为空
+  - 解决：优先加载本地缓存，`local_files_only=True`，自动查找 `~/.cache/huggingface/hub/`
+- **问题2：Chroma 非持久化**
+  - 现象：`chromadb.Client()` 在当前版本下是内存模式，数据丢失
+  - 解决：改用 `chromadb.PersistentClient()`，存储到 `data/chroma_db`
+- **问题3：索引库为空**
+  - 现象：`count=0`，即使检索链路正常也没有内容可取
+  - 解决：TopicExecutor 增加自动索引，索引为空时自动调用 `index_vault()`
+- **根因**：三个问题叠加，表现为"RAG 检索返回 0 条"
+- **环境变量**：`AGENT_RAG_AUTO_INDEX=true` 控制自动索引（默认开启）
+
 ## 验证结果
 
 | 环节 | 状态 |
@@ -115,6 +132,8 @@ python main.py --accept-topic topic_xxx
 | 选题生成 | 正常，基于热点+vault笔记 |
 | 接受选题自动触发 | 正常，accept后自动调用TopicExecutor |
 | 内容生成入队 | 正常，公众号+小红书双平台 |
+| RAG 向量检索 | 正常，3条相关笔记融合到生成内容 |
+| 微信公众号发布 | 正常，已发布1篇（4479字） |
 
 ## 待优化
 
