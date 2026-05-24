@@ -582,11 +582,11 @@ def _handle_agent_mode(args):
         keywords = args.topic_keywords or os.getenv("AGENT_TOPIC_KEYWORDS")
         suggestions = picker.pick_topics(vault_path=vault_path, keywords=keywords)
         if suggestions:
-            print(f"\n💡 生成 {len(suggestions)} 条选题建议:")
+            print(f"\n生成 {len(suggestions)} 条选题建议:")
             for s in suggestions:
                 print(f"   • [{s.priority}] {s.title} ({s.trending_topic})")
         else:
-            print("⚠️ 未生成选题建议")
+            print("未生成选题建议")
         return
 
     if args.topics:
@@ -594,7 +594,7 @@ def _handle_agent_mode(args):
         picker = TopicPicker()
         items = picker.list_suggestions(status=args.topic_status)
         if not items:
-            print(f"📭 无 '{args.topic_status}' 状态的选题建议")
+            print(f"无 '{args.topic_status}' 状态的选题建议")
             return
         print(f"\n{'Title':<40} {'Status':<10} {'Priority'}")
         print("-" * 65)
@@ -607,13 +607,31 @@ def _handle_agent_mode(args):
     if args.accept_topic:
         from automation import TopicPicker
         ok = TopicPicker().accept(args.accept_topic)
-        print(f"{'✅ 已接受' if ok else '❌ 未找到'}: {args.accept_topic}")
+        if ok:
+            print(f"已接受: {args.accept_topic}")
+        else:
+            print(f"未找到: {args.accept_topic}")
         return
 
     if args.reject_topic:
         from automation import TopicPicker
         ok = TopicPicker().reject(args.reject_topic)
-        print(f"{'✅ 已拒绝' if ok else '❌ 未找到'}: {args.reject_topic}")
+        if ok:
+            print(f"已拒绝: {args.reject_topic}")
+        else:
+            print(f"未找到: {args.reject_topic}")
+        return
+
+    # ---- 批量执行 accepted 选题 ----
+    if args.execute_topics:
+        from automation import TopicExecutor
+        executor = TopicExecutor()
+        results = executor.execute_batch(limit=args.execute_limit)
+        success = sum(1 for r in results if r["success"])
+        print(f"\n完成: {success}/{len(results)} 个选题执行成功")
+        for r in results:
+            if not r["success"]:
+                print(f"   失败: {r.get('error', '未知错误')}")
         return
 
     # ---- P1: A/B 测试 ----
@@ -733,8 +751,10 @@ def main():
     parser.add_argument("--topic-keywords", help="选题热点关键词（默认读取 AGENT_TOPIC_KEYWORDS）")
     parser.add_argument("--topics", action="store_true", help="查看选题建议")
     parser.add_argument("--topic-status", default="pending", help="选题建议筛选状态")
-    parser.add_argument("--accept-topic", metavar="ID", help="接受选题建议")
+    parser.add_argument("--accept-topic", metavar="ID", help="接受选题建议并自动生成为内容")
     parser.add_argument("--reject-topic", metavar="ID", help="拒绝选题建议")
+    parser.add_argument("--execute-topics", action="store_true", help="批量执行所有 accepted 选题")
+    parser.add_argument("--execute-limit", type=int, default=10, help="批量执行数量上限")
     parser.add_argument("--generate-ab", metavar="TYPES", help="生成 A/B 变体，如 title,hook")
     parser.add_argument("--ab-count", type=int, default=3, help="每种变体类型生成数量")
     parser.add_argument("--ab-queue-id", help="指定队列项 ID 生成 A/B 变体")
@@ -758,7 +778,7 @@ def main():
         args.schedule, args.unschedule, args.retry_failed,
         args.import_metrics, args.analyze_feedback,
         args.show_profile, args.pick_topics, args.topics, args.accept_topic,
-        args.reject_topic, args.generate_ab, args.ab_results,
+        args.reject_topic, args.execute_topics, args.generate_ab, args.ab_results,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:

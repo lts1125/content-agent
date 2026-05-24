@@ -21,6 +21,8 @@ from automation.scheduler import TaskScheduler
 
 from automation.trend_scheduler import TrendScheduler
 
+from automation.topic_executor import TopicExecutor
+
 __all__ = [
     "VaultWatcher",
     "AgentController",
@@ -42,4 +44,5 @@ __all__ = [
     "SchedulerConfig",
     "TaskScheduler",
     "TrendScheduler",
+    "TopicExecutor",
 ]

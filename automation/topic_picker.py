@@ -172,6 +172,7 @@ class TopicPicker:
         return [_row_to_topic(r) for r in rows]
 
     def accept(self, suggestion_id: str) -> bool:
+        """接受选题，并自动触发生成"""
         conn = _get_conn()
         cur = conn.execute(
             "UPDATE topic_suggestions SET status = ? WHERE id = ?",
@@ -179,7 +180,21 @@ class TopicPicker:
         )
         conn.commit()
         conn.close()
-        return cur.rowcount > 0
+
+        if cur.rowcount > 0:
+            # 自动触发生成
+            try:
+                from automation.topic_executor import TopicExecutor
+                executor = TopicExecutor()
+                result = executor.execute(suggestion_id)
+                if result.get("success"):
+                    print(f"[TopicPicker] 已自动生成为 task_id={result['task_id']}, 入队 {result['queued']} 个平台")
+                else:
+                    print(f"[TopicPicker] 自动生成失败: {result.get('error')}")
+            except Exception as e:
+                print(f"[TopicPicker] 自动触发失败: {e}")
+            return True
+        return False
 
     def reject(self, suggestion_id: str) -> bool:
         conn = _get_conn()
