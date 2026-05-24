@@ -22,6 +22,14 @@ class TopicExecutor:
 
     def __init__(self, orchestrator: Optional[Orchestrator] = None):
         self.orch = orchestrator or Orchestrator()
+        self._indexer = None  # 懒加载 RAG
+
+    def _get_indexer(self):
+        """懒加载 RAG 索引器"""
+        if self._indexer is None:
+            from content_agent.rag.indexer import VaultIndexer
+            self._indexer = VaultIndexer()
+        return self._indexer
 
     def execute(self, topic_id: str) -> dict:
         """
@@ -137,7 +145,7 @@ class TopicExecutor:
     # 笔记驱动（原有逻辑）
     # ------------------------------------------------------------------
     def _execute_note(self, topic: dict, platforms: list[str]) -> dict:
-        """基于笔记生成内容"""
+        """基于笔记生成内容（支持 RAG 检索增强）"""
         note_path = self._resolve_note_path(topic["note_file"])
         if not note_path or not note_path.exists():
             return {"success": False, "error": f"笔记文件不存在: {topic['note_file']}"}
@@ -147,8 +155,29 @@ class TopicExecutor:
         except Exception as e:
             return {"success": False, "error": f"读取笔记失败: {e}"}
 
+        # RAG 检索：找到相关笔记作为补充上下文
+        rag_context = ""
+        topic_title = topic.get("title", "")
+        if topic_title:
+            try:
+                indexer = self._get_indexer()
+                results = indexer.search(topic_title, n_results=3)
+                if results:
+                    rag_context = "\n\n【相关笔记参考】\n"
+                    for r in results:
+                        if r["metadata"].get("source") != str(note_path.relative_to(Path(os.getenv("VAULT_PATH", ".")))):
+                            rag_context += f"- {r['metadata'].get('title', 'unknown')}: {r['document'][:300]}...\n"
+                    if rag_context == "\n\n【相关笔记参考】\n":
+                        rag_context = ""
+            except Exception as e:
+                print(f"[TopicExecutor] RAG 检索失败: {e}")
+                rag_context = ""
+
+        # 合并笔记内容 + RAG 上下文
+        combined_notes = raw_notes + rag_context
+
         task_input = TaskInput(
-            note_text=raw_notes,
+            note_text=combined_notes,
             note_source=str(note_path),
             platforms=platforms,
             enable_research=False,
