@@ -358,6 +358,81 @@ def process_single_note_v2(
     return result
 
 
+def _run_trend_pipeline(args):
+    """P0: 热点监控完整流程"""
+    from automation import TrendScheduler, TopicPicker
+    
+    vault_path = args.vault or os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
+    
+    print("=" * 60)
+    print("🔥 热点监控流水线")
+    print("=" * 60)
+    
+    # Step 1: 检查热点
+    print("\n[1/4] 检查热点...")
+    scheduler = TrendScheduler()
+    result = scheduler.check_trends()
+    
+    if not result["matched"]:
+        print("   未匹配到相关热点，流程结束")
+        return
+    
+    print(f"   匹配到 {result['matched']} 条，评估通过 {result.get('passed', 0)} 条")
+    
+    # Step 2: 生成选题
+    print("\n[2/4] 生成选题建议...")
+    picker = TopicPicker()
+    suggestions = picker.pick_topics(
+        vault_path=vault_path,
+        trending_hint=result.get("trending_text", ""),
+        limit=args.trend_limit or 3
+    )
+    
+    if not suggestions:
+        print("   未生成选题建议")
+        return
+    
+    print(f"   生成 {len(suggestions)} 条选题:")
+    for s in suggestions:
+        print(f"   • [{s.priority}] {s.title}")
+        if s.trending_topic:
+            print(f"     关联热点: {s.trending_topic}")
+        print(f"     ID: {s.id}")
+    
+    # Step 3: 自动或半自动处理
+    if args.trend_auto:
+        print("\n[3/4] 自动接受所有选题...")
+        for s in suggestions:
+            picker.accept(s.id)
+            print(f"   已接受: {s.title[:40]}...")
+    else:
+        print("\n[3/4] 等待人工确认（使用 --trend-auto 可跳过）")
+        print("   请运行以下命令接受选题:")
+        for s in suggestions:
+            print(f"      python main.py --accept-topic {s.id}")
+        return
+    
+    # Step 4: 执行生成
+    print("\n[4/4] 执行选题生成内容...")
+    from automation import TopicExecutor
+    executor = TopicExecutor()
+    results = executor.execute_batch(limit=len(suggestions))
+    success = sum(1 for r in results if r["success"])
+    print(f"   完成: {success}/{len(results)} 个选题执行成功")
+    
+    # 显示生成的队列项
+    if success > 0:
+        from automation import PublishQueue
+        items = PublishQueue.list(status="pending")
+        print(f"\n   待发队列新增 {len(items)} 项:")
+        for item in items[:5]:
+            print(f"   • [{item.platform}] {item.title[:40]}...")
+    
+    print("\n" + "=" * 60)
+    print("✅ 热点流水线完成")
+    print("=" * 60)
+
+
 def _handle_agent_mode(args):
     """处理 Agent 模式 CLI 参数"""
     import shutil
@@ -634,6 +709,11 @@ def _handle_agent_mode(args):
                 print(f"   失败: {r.get('error', '未知错误')}")
         return
 
+    # ---- P0: 热点监控全流程 ----
+    if args.trend_pipeline:
+        _run_trend_pipeline(args)
+        return
+
     # ---- P1: A/B 测试 ----
     if args.generate_ab:
         from automation import ABTestFramework, PublishQueue
@@ -755,6 +835,9 @@ def main():
     parser.add_argument("--reject-topic", metavar="ID", help="拒绝选题建议")
     parser.add_argument("--execute-topics", action="store_true", help="批量执行所有 accepted 选题")
     parser.add_argument("--execute-limit", type=int, default=10, help="批量执行数量上限")
+    parser.add_argument("--trend-pipeline", action="store_true", help="[P0] 运行热点监控完整流程")
+    parser.add_argument("--trend-auto", action="store_true", help="[P0] 热点流程自动接受选题（无需人工确认）")
+    parser.add_argument("--trend-limit", type=int, default=3, help="[P0] 热点流程生成选题数量上限")
     parser.add_argument("--generate-ab", metavar="TYPES", help="生成 A/B 变体，如 title,hook")
     parser.add_argument("--ab-count", type=int, default=3, help="每种变体类型生成数量")
     parser.add_argument("--ab-queue-id", help="指定队列项 ID 生成 A/B 变体")
@@ -778,7 +861,8 @@ def main():
         args.schedule, args.unschedule, args.retry_failed,
         args.import_metrics, args.analyze_feedback,
         args.show_profile, args.pick_topics, args.topics, args.accept_topic,
-        args.reject_topic, args.execute_topics, args.generate_ab, args.ab_results,
+        args.reject_topic, args.execute_topics, args.trend_pipeline,
+        args.generate_ab, args.ab_results,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:

@@ -104,14 +104,16 @@ class TrendScheduler:
             tag = f"[{item.tag}]" if item.tag else ""
             print(f"  • {item.title} {tag} (来源: {item.source})")
 
-        # LLM 评估：过滤低质量匹配
-        print(f"\n[TrendScheduler] 开始 LLM 评估...")
+        # LLM 评估：过滤低质量匹配（只评估前N条，避免超时）
+        max_eval = int(os.getenv("AGENT_TREND_MAX_EVAL", "5"))
+        to_evaluate = unique_matched[:max_eval]
+        print(f"\n[TrendScheduler] 开始 LLM 评估（前 {len(to_evaluate)}/{len(unique_matched)} 条）...")
         evaluated = self._evaluator.evaluate_batch(
-            unique_matched,
+            to_evaluate,
             profile=self._profile,
             min_confidence=getattr(self.config, "trend_min_confidence", 60),
         )
-        print(f"[TrendScheduler] 评估通过: {len(evaluated)}/{len(unique_matched)} 条")
+        print(f"[TrendScheduler] 评估通过: {len(evaluated)}/{len(to_evaluate)} 条")
 
         # 生成选题建议（只针对评估通过的）
         if evaluated:

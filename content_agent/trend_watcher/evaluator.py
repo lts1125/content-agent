@@ -42,23 +42,37 @@ class UserProfile:
 class TrendEvaluator:
     """热点评估器"""
 
-    SYSTEM_PROMPT = """你是一位资深内容策略顾问，帮助技术博主判断热点是否值得跟进。
+    SYSTEM_PROMPT = """你是一位资深内容策略顾问，帮助技术博主判断热点/技术趋势是否值得跟进。
 
-判断标准：
-1. 领域匹配度：热点是否和博主领域相关？能否从技术角度切入？
-2. 时效性价值：这个热点是昙花一现还是有持续讨论价值？
-3. 独特视角：博主能否提供不同于大众媒体的独特观点？
-4. 受众兴趣：目标读者会关心这个话题吗？
-5. 内容深度：能否写出有技术深度的内容，而非简单复述新闻？
+你评估的对象可能有两种类型：
+1. **突发热点**：社会事件、产品发布、行业新闻等时效性强的内容
+2. **技术趋势**：技术社区热榜文章、实战案例、工具介绍等持续性内容
+
+对两种类型的判断标准不同：
+
+**突发热点判断**：
+- 领域匹配度：是否和博主领域相关？
+- 时效性价值：是昙花一现还是有持续讨论价值？
+- 独特视角：能否提供不同于大众媒体的技术观点？
+
+**技术趋势判断**（重点）：
+- 技术深度：文章/项目是否有可挖掘的技术细节？
+- 实战价值：读者能否从中获得可落地的经验？
+- 话题延展性：能否结合博主自身项目做二次创作？
+- 社区热度：在技术社区中的讨论度和关注度如何？
+
+通用标准：
+- 受众兴趣：目标读者会关心这个话题吗？
+- 内容可行性：能否写出有技术深度的内容，而非简单复述？
 
 输出要求：
-- should_follow: true 只有当热点确实值得跟进时
+- should_follow: true 当话题确实值得跟进时（技术趋势只要实战价值高就值得）
 - angle: 具体的技术切入角度，避免泛泛而谈
-- content_type: 从 [技术解读, 实战教程, 观点评论, 行业资讯] 中选择
+- content_type: 从 [技术解读, 实战教程, 观点评论, 行业资讯, 工具测评] 中选择
 - confidence: 你的确定程度（0-100）
 - platforms: 建议发布到哪些平台 [xiaohongshu, gongzhonghao, douyin]
 
-重要：不要为了追热点而追热点。质量差的跟进会损害账号调性。"""
+重要：技术趋势不等于低价值。一篇好的技术实战文章，比追一个无关的社会热点更有价值。"""
 
     def __init__(self, model=None):
         if model is None:
@@ -124,14 +138,22 @@ class TrendEvaluator:
     @staticmethod
     def _build_prompt(trend: TrendItem, profile: UserProfile) -> str:
         avoid_str = "、".join(profile.avoid_topics) if profile.avoid_topics else "无"
-        return f"""请评估以下热点是否值得跟进：
+        # 判断热点类型，给 LLM 更多上下文
+        source_type = "技术社区"
+        if "weibo" in trend.source.lower():
+            source_type = "社交媒体"
+        elif "zhihu" in trend.source.lower():
+            source_type = "问答社区"
+        
+        return f"""请评估以下{'热点' if source_type == '社交媒体' else '技术趋势'}是否值得跟进：
 
-【热点信息】
+【内容信息】
 标题: {trend.title}
-来源: {trend.source}
-排名: {trend.rank}
+来源: {trend.source} ({source_type})
+排名: 第{trend.rank}名
 热度: {trend.heat}
 标签: {trend.tag}
+URL: {trend.url}
 
 【博主画像】
 领域: {profile.domain}
@@ -139,7 +161,7 @@ class TrendEvaluator:
 目标受众: {profile.target_audience}
 回避话题: {avoid_str}
 
-请给出评估结果。"""
+请判断这是"突发热点"还是"技术趋势"，并给出评估结果。如果是技术趋势，重点关注实战价值和可延展性。"""
 
 
 def demo():

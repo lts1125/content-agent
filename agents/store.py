@@ -192,7 +192,8 @@ def init_topic_suggestions_table():
             reason TEXT,
             priority INTEGER DEFAULT 3,
             status TEXT DEFAULT 'pending',
-            created_at TEXT
+            created_at TEXT,
+            generated_task_id TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_topics_status ON topic_suggestions(status);
         """

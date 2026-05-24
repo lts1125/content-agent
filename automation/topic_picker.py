@@ -108,11 +108,12 @@ class TopicPicker:
             print(f"[TopicPicker] LLM 生成失败: {e}")
             return []
 
-        # 保存到 DB
+        # 保存到 DB，并更新 suggestions 的 id
         now = datetime.now().isoformat()
         conn = _get_conn()
         for s in suggestions:
             sid = f"topic_{uuid.uuid4().hex[:12]}"
+            s.id = sid  # 更新对象 id
             conn.execute(
                 """
                 INSERT INTO topic_suggestions

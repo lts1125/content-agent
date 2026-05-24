@@ -170,14 +170,24 @@ class TopicExecutor:
     @staticmethod
     def _resolve_note_path(note_file: str) -> Optional[Path]:
         """解析笔记文件路径"""
+        # 1. 直接作为绝对/相对路径
+        p = Path(note_file).expanduser()
+        if p.exists():
+            return p
+        
+        # 2. 在 VAULT_PATH 下查找
         vault_path = os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
         p = Path(vault_path) / note_file
         if p.exists():
             return p
-        # 尝试绝对路径
-        p = Path(note_file).expanduser()
-        if p.exists():
-            return p
+        
+        # 3. 在 VAULT_PATH 下递归查找（只匹配文件名）
+        vault = Path(vault_path)
+        if vault.exists():
+            for f in vault.rglob("*.md"):
+                if f.name == note_file or f.stem == note_file.replace(".md", ""):
+                    return f
+        
         return None
 
     @staticmethod
