@@ -356,6 +356,38 @@ def _build_point_card(index: int, title: str, points: List[str]) -> str:
     </div>"""
 
 
+def _build_content_card(points: List[str]) -> str:
+    """合并所有内容到一张大卡片"""
+    items_html = "\n".join(
+        f'<div class="point-item"><div class="point-bullet"></div><div class="point-text">{p}</div></div>'
+        for p in points
+    )
+    return f"""
+    <div class="card point-card">
+        <div class="point-card-header">
+            <div class="point-num">★</div>
+            <div class="point-title">核心看点</div>
+        </div>
+        <div class="point-items">
+            {items_html}
+        </div>
+    </div>"""
+
+
+def _build_end_card(quote: str) -> str:
+    """金句 + 互动 合并到最后一张"""
+    return f"""
+    <div class="card quote-card">
+        <div class="quote-mark">"</div>
+        <div class="quote-text">{quote}</div>
+        <div style="margin-top: 80px;">
+            <div class="cta-title" style="font-size: 36px;">关注获取更多科技资讯</div>
+            <div class="cta-text" style="font-size: 24px; margin: 20px 0 30px;">每天3分钟 · 了解AI与科技行业最新动态</div>
+            <div class="cta-btn" style="padding: 16px 40px; font-size: 24px;">点赞 + 关注 ↓</div>
+        </div>
+    </div>"""
+
+
 def _build_highlight_card(text: str, sub: str = "") -> str:
     sub_html = f'<div class="highlight-sub">{sub}</div>' if sub else ""
     return f"""
@@ -396,26 +428,19 @@ class DouyinRenderer:
         # 1. 封面
         cards.append(_build_cover_card(tag, title))
 
-        # 2. 内容卡片
-        for idx, (sec_title, sec_points) in enumerate(sections[:3], 1):
-            if sec_points:
-                cards.append(_build_point_card(idx, sec_title, sec_points))
+        # 2. 内容卡片：合并所有 section 到一张大卡片
+        all_points = []
+        for sec_title, sec_points in sections:
+            # 小节标题作为加粗要点
+            all_points.append(f"<strong>{sec_title}</strong>")
+            for p in sec_points[:3]:  # 每节最多3条
+                all_points.append(p)
+        
+        if all_points:
+            cards.append(_build_content_card(all_points))
 
-        # 3. 强调卡片（找一句重点）
-        emphasis = None
-        for line in content.split("\n"):
-            line = line.strip()
-            if 10 < len(line) < 40 and any(w in line for w in ["意味着", "标志着", "未来", "突破"]):
-                emphasis = line
-                break
-        if emphasis:
-            cards.append(_build_highlight_card(emphasis))
-
-        # 4. 金句卡片
-        cards.append(_build_quote_card(quote))
-
-        # 5. 互动卡片
-        cards.append(_build_cta_card())
+        # 3. 金句 + 互动 合并到最后一张
+        cards.append(_build_end_card(quote))
 
         html = DOUYIN_TEMPLATE.replace("{CARDS}", "\n".join(cards))
 
