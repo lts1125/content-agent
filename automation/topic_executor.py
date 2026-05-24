@@ -161,13 +161,21 @@ class TopicExecutor:
         if topic_title:
             try:
                 indexer = self._get_indexer()
-                results = indexer.search(topic_title, n_results=3)
+                results = indexer.search(topic_title, n_results=5)
                 if results:
                     rag_context = "\n\n【相关笔记参考】\n"
+                    current_source = note_path.name
+                    added = 0
                     for r in results:
-                        if r["metadata"].get("source") != str(note_path.relative_to(Path(os.getenv("VAULT_PATH", ".")))):
-                            rag_context += f"- {r['metadata'].get('title', 'unknown')}: {r['document'][:300]}...\n"
-                    if rag_context == "\n\n【相关笔记参考】\n":
+                        result_source = r["metadata"].get("source", "")
+                        # 排除当前笔记（按文件名匹配）
+                        if current_source in result_source or result_source in current_source:
+                            continue
+                        rag_context += f"- {r['metadata'].get('title', 'unknown')}: {r['document'][:300]}...\n"
+                        added += 1
+                        if added >= 3:
+                            break
+                    if added == 0:
                         rag_context = ""
             except Exception as e:
                 print(f"[TopicExecutor] RAG 检索失败: {e}")
