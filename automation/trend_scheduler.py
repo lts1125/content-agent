@@ -118,15 +118,39 @@ class TrendScheduler:
             print(f"  • {item.title} {tag} (来源: {item.source})")
 
         # LLM 评估：过滤低质量匹配（只评估前N条，避免超时）
-        max_eval = int(os.getenv("AGENT_TREND_MAX_EVAL", "5"))
-        to_evaluate = unique_matched[:max_eval]
-        print(f"\n[TrendScheduler] 开始 LLM 评估（前 {len(to_evaluate)}/{len(unique_matched)} 条）...")
-        evaluated = self._evaluator.evaluate_batch(
-            to_evaluate,
-            profile=self._profile,
-            min_confidence=getattr(self.config, "trend_min_confidence", 60),
-        )
-        print(f"[TrendScheduler] 评估通过: {len(evaluated)}/{len(to_evaluate)} 条")
+        # 新闻源跳过评估（资讯类内容直接生成）
+        news_items = [t for t in unique_matched if t.source == "news"]
+        other_items = [t for t in unique_matched if t.source != "news"]
+        
+        evaluated = []
+        
+        # 新闻源直接通过（用于抖音图文）
+        if news_items:
+            print(f"[TrendScheduler] 新闻源 {len(news_items)} 条直接通过（资讯类）")
+            for item in news_items[:3]:  # 最多3条
+                from content_agent.trend_watcher.evaluator import EvaluationResult
+                evaluated.append((item, EvaluationResult(
+                    should_follow=True,
+                    confidence=75,
+                    reason="科技资讯，适合抖音图文",
+                    angle="整理核心要点，生成资讯图文",
+                    content_type="资讯整理",
+                )))
+        
+        # 其他源走 LLM 评估
+        if other_items:
+            max_eval = int(os.getenv("AGENT_TREND_MAX_EVAL", "5"))
+            to_evaluate = other_items[:max_eval]
+            print(f"\n[TrendScheduler] 开始 LLM 评估（前 {len(to_evaluate)} 条）...")
+            eval_results = self._evaluator.evaluate_batch(
+                to_evaluate,
+                profile=self._profile,
+                min_confidence=getattr(self.config, "trend_min_confidence", 60),
+            )
+            evaluated.extend(eval_results)
+            print(f"[TrendScheduler] 评估通过: {len(eval_results)}/{len(to_evaluate)} 条")
+        
+        print(f"[TrendScheduler] 总计通过: {len(evaluated)} 条")
 
         # 生成选题建议（只针对评估通过的）
         if evaluated:

@@ -77,15 +77,20 @@ class NewsSource(TrendSource):
                     config["url"],
                     source_name,
                     config["language"],
-                    limit=limit // len(self.RSS_FEEDS),
+                    limit=limit,
                 )
                 all_items.extend(items)
             except Exception as e:
                 print(f"[NewsSource] {source_name} 抓取失败: {e}")
 
-        # 按时间排序，取最新的
-        all_items.sort(key=lambda x: x.published, reverse=True)
-        return all_items[:limit]
+        # 去重后返回
+        seen = set()
+        unique_items = []
+        for item in all_items:
+            if item.title not in seen:
+                seen.add(item.title)
+                unique_items.append(item)
+        return unique_items[:limit]
 
     def _fetch_rss(self, url: str, source: str, language: str, limit: int) -> List[TrendItem]:
         """抓取单个 RSS 源"""
