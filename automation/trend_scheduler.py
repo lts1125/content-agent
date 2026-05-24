@@ -23,6 +23,7 @@ from content_agent.trend_watcher import (
     WeiboHotSource, ZhihuHotSource, JuejinHotSource,
     TrendEvaluator, UserProfile,
 )
+from content_agent.trend_watcher.news_source import NewsSource
 
 
 class TrendScheduler:
@@ -42,6 +43,7 @@ class TrendScheduler:
             "weibo": WeiboHotSource,
             "zhihu": ZhihuHotSource,
             "juejin": JuejinHotSource,
+            "news": NewsSource,
         }
         sources = []
         for name in getattr(self.config, "trend_sources", ["weibo"]):
@@ -80,11 +82,22 @@ class TrendScheduler:
                 trends = source.fetch()
                 if not trends:
                     continue
-                matched = source.filter_by_keywords(trends, keywords)
-                for item in matched:
-                    item.source = source.name
-                all_matched.extend(matched)
-                print(f"[TrendScheduler] {source.name}: {len(trends)} 条热搜，匹配 {len(matched)} 条")
+                
+                # 新闻源有摘要，直接加入；热榜源需要关键词匹配
+                if isinstance(source, NewsSource):
+                    # 新闻源：用关键词过滤标题和摘要
+                    matched = self._filter_news(trends, keywords)
+                    for item in matched:
+                        item.source = source.name
+                    all_matched.extend(matched)
+                    print(f"[TrendScheduler] {source.name}: {len(trends)} 条新闻，匹配 {len(matched)} 条")
+                else:
+                    # 热榜源：原有逻辑
+                    matched = source.filter_by_keywords(trends, keywords)
+                    for item in matched:
+                        item.source = source.name
+                    all_matched.extend(matched)
+                    print(f"[TrendScheduler] {source.name}: {len(trends)} 条热搜，匹配 {len(matched)} 条")
             except Exception as e:
                 print(f"[TrendScheduler] {source.name} 抓取失败: {e}")
 
@@ -148,11 +161,28 @@ class TrendScheduler:
         # 3. 默认关键词
         return ["AI", "人工智能", "大模型", "Agent", "ChatGPT", "LLM"]
 
+    def _filter_news(self, trends: List, keywords: List[str]) -> List:
+        """新闻源过滤：标题+摘要匹配关键词"""
+        if not keywords:
+            return trends
+        keywords_lower = [k.lower() for k in keywords]
+        matched = []
+        for item in trends:
+            text = f"{item.title} {item.summary}".lower()
+            for kw in keywords_lower:
+                if kw in text:
+                    matched.append(item)
+                    break
+        return matched
+
     def _build_trending_hint(self, trends: List) -> str:
         """把热点列表拼接成文本，供 TopicPicker 使用"""
         lines = ["【当前热点】"]
         for item in trends[:10]:
             lines.append(f"- {item.title}")
+            # 新闻源有摘要，加入更多上下文
+            if hasattr(item, 'summary') and item.summary:
+                lines.append(f"  {item.summary[:100]}")
         return "\n".join(lines)
 
     def _generate_suggestions(self, trending_hint: str) -> List:
