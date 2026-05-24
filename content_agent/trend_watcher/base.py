@@ -10,12 +10,14 @@ from typing import List
 @dataclass
 class TrendItem:
     """单条热点条目"""
-    rank: int                # 排名
-    title: str               # 标题
+    rank: int = 0            # 排名
+    title: str = ""          # 标题
     url: str = ""            # 链接
     heat: str = ""           # 热度值（如 "123万"）
     tag: str = ""            # 标签（如 "爆", "热", "新"）
     source: str = ""         # 来源标识
+    summary: str = ""        # 摘要/正文
+    language: str = "zh"     # 语言
 
 
 class TrendSource(ABC):
