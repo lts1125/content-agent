@@ -19,17 +19,15 @@ class ChromaStore:
 
     def __init__(self, persist_dir: Optional[str] = None):
         if persist_dir is None:
-            persist_dir = os.path.join(
-                os.path.expanduser("~"), ".content_agent", "chroma_db"
-            )
+            persist_dir = os.getenv("RAG_CHROMA_DIR")
+        if persist_dir is None:
+            persist_dir = Path(__file__).resolve().parents[2] / "data" / "chroma_db"
         self.persist_dir = Path(persist_dir)
         self.persist_dir.mkdir(parents=True, exist_ok=True)
 
-        self._client = chromadb.Client(
-            Settings(
-                persist_directory=str(self.persist_dir),
-                anonymized_telemetry=False,
-            )
+        self._client = chromadb.PersistentClient(
+            path=str(self.persist_dir),
+            settings=Settings(anonymized_telemetry=False),
         )
         self._collection = self._client.get_or_create_collection(
             name=self.COLLECTION_NAME,

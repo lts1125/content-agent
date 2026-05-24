@@ -31,6 +31,11 @@ class TopicExecutor:
             self._indexer = VaultIndexer()
         return self._indexer
 
+    @staticmethod
+    def _rag_auto_index_enabled() -> bool:
+        val = os.getenv("AGENT_RAG_AUTO_INDEX", "true").lower().strip()
+        return val in ("1", "true", "yes", "on")
+
     def execute(self, topic_id: str) -> dict:
         """
         执行单个选题生成
@@ -159,6 +164,11 @@ class TopicExecutor:
         rag_context = ""
         try:
             indexer = self._get_indexer()
+            if indexer.store.count() == 0 and self._rag_auto_index_enabled():
+                vault_path = os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
+                print(f"[TopicExecutor] RAG 索引为空，开始索引 Vault: {vault_path}")
+                indexer.index_vault(vault_path, clear_existing=True)
+                print(f"[TopicExecutor] RAG 当前索引数量: {indexer.store.count()}")
             
             # 策略1：用笔记前200字检索
             search_text = raw_notes[:200] if len(raw_notes) > 200 else raw_notes
@@ -187,7 +197,7 @@ class TopicExecutor:
                 if added == 0:
                     rag_context = ""
         except Exception as e:
-            print(f"[TopicExecutor] RAG 检索失败: {e}")
+            print(f"[TopicExecutor] RAG 检索失败: {type(e).__name__}: {e}")
             rag_context = ""
 
         # 合并笔记内容 + RAG 上下文

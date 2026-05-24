@@ -1,9 +1,12 @@
 """
 BGE 嵌入模型封装
 
-使用 BAAI/bge-small-zh-v1.5 生成文本向量
+使用 BAAI/bge-small-zh-v1.5 生成文本向量。
+优先加载本地模型，避免离线环境下检索阶段卡在 HuggingFace 联网检查。
 """
 
+import os
+from pathlib import Path
 from typing import List
 
 import numpy as np
@@ -15,15 +18,49 @@ class BGEEmbedder:
     MODEL_NAME = "BAAI/bge-small-zh-v1.5"
     DIMENSION = 512
 
-    def __init__(self):
+    def __init__(self, model_path: str = None):
         self._model = None
+        self.model_path = model_path or os.getenv("RAG_MODEL_PATH") or os.getenv("BGE_MODEL_PATH")
+
+    def _resolve_model_path(self) -> str:
+        """返回优先使用的模型路径或模型名。"""
+        if self.model_path:
+            p = Path(self.model_path).expanduser()
+            if p.exists():
+                return str(p)
+            print(f"[BGEEmbedder] 本地模型路径不存在，回退到模型名: {p}")
+
+        snapshot = self._find_hf_snapshot()
+        if snapshot:
+            return str(snapshot)
+
+        return self.MODEL_NAME
+
+    @staticmethod
+    def _find_hf_snapshot() -> Path:
+        """查找 HuggingFace 默认缓存中的完整 snapshot。"""
+        cache_root = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        model_root = cache_root / "hub" / "models--BAAI--bge-small-zh-v1.5" / "snapshots"
+        if not model_root.exists():
+            return None
+
+        required = ("modules.json", "config.json", "config_sentence_transformers.json")
+        for snapshot in sorted(model_root.iterdir(), reverse=True):
+            if snapshot.is_dir() and all((snapshot / name).exists() for name in required):
+                return snapshot
+        return None
 
     def _load_model(self):
         """延迟加载模型"""
         if self._model is None:
             from sentence_transformers import SentenceTransformer
-            print(f"[BGEEmbedder] 加载模型: {self.MODEL_NAME}")
-            self._model = SentenceTransformer(self.MODEL_NAME)
+            model_name_or_path = self._resolve_model_path()
+            local_only = Path(model_name_or_path).expanduser().exists()
+            print(f"[BGEEmbedder] 加载模型: {model_name_or_path}")
+            self._model = SentenceTransformer(
+                model_name_or_path,
+                local_files_only=local_only,
+            )
             print(f"[BGEEmbedder] 模型加载完成")
         return self._model
 
