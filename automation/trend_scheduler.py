@@ -19,17 +19,22 @@ from apscheduler.triggers.cron import CronTrigger
 
 from automation.config import SchedulerConfig
 from automation.topic_picker import TopicPicker
-from content_agent.trend_watcher import WeiboHotSource, ZhihuHotSource, JuejinHotSource
+from content_agent.trend_watcher import (
+    WeiboHotSource, ZhihuHotSource, JuejinHotSource,
+    TrendEvaluator, UserProfile,
+)
 
 
 class TrendScheduler:
-    """热点调度器：定时检查热榜，匹配关键词，生成选题"""
+    """热点调度器：定时检查热榜，匹配关键词，评估后生成选题"""
 
     def __init__(self, config: Optional[SchedulerConfig] = None):
         self.config = config or SchedulerConfig.from_env()
         self.scheduler = BackgroundScheduler()
         self._sources = self._init_sources()
         self._picker = TopicPicker()
+        self._evaluator = TrendEvaluator()
+        self._profile = self._init_profile()
 
     def _init_sources(self) -> List:
         """根据配置初始化热榜源"""
@@ -46,6 +51,15 @@ class TrendScheduler:
             else:
                 print(f"[TrendScheduler] 未知热榜源: {name}，跳过")
         return sources
+
+    def _init_profile(self) -> UserProfile:
+        """初始化用户画像"""
+        return UserProfile(
+            domain=os.getenv("AGENT_DOMAIN", "AI/大模型/Agent开发"),
+            tone=os.getenv("AGENT_TONE", "技术干货+实战经验"),
+            target_audience=os.getenv("AGENT_AUDIENCE", "程序员、AI从业者、技术爱好者"),
+            avoid_topics=[t.strip() for t in os.getenv("AGENT_AVOID_TOPICS", "").split(",") if t.strip()],
+        )
 
     # ------------------------------------------------------------------
     # 核心逻辑
@@ -90,9 +104,22 @@ class TrendScheduler:
             tag = f"[{item.tag}]" if item.tag else ""
             print(f"  • {item.title} {tag} (来源: {item.source})")
 
-        # 生成选题建议
-        if unique_matched:
-            trending_hint = self._build_trending_hint(unique_matched)
+        # LLM 评估：过滤低质量匹配
+        print(f"\n[TrendScheduler] 开始 LLM 评估...")
+        evaluated = self._evaluator.evaluate_batch(
+            unique_matched,
+            profile=self._profile,
+            min_confidence=getattr(self.config, "trend_min_confidence", 60),
+        )
+        print(f"[TrendScheduler] 评估通过: {len(evaluated)}/{len(unique_matched)} 条")
+
+        # 生成选题建议（只针对评估通过的）
+        if evaluated:
+            evaluated_trends = [t for t, _ in evaluated]
+            trending_hint = self._build_trending_hint(evaluated_trends)
+            # 在 hint 中加入评估角度
+            for trend, eval_result in evaluated:
+                trending_hint += f"\n- [{trend.title}] 切入角度: {eval_result.angle}"
             suggestions = self._generate_suggestions(trending_hint)
         else:
             suggestions = []
@@ -100,7 +127,8 @@ class TrendScheduler:
         return {
             "checked": True,
             "matched": len(unique_matched),
-            "trends": [{"title": t.title, "source": t.source, "rank": t.rank} for t in unique_matched[:20]],
+            "passed": len(evaluated),
+            "trends": [{"title": t.title, "source": t.source, "rank": t.rank} for t, _ in evaluated[:20]],
             "suggestions": len(suggestions),
         }
 

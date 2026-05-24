@@ -28,7 +28,8 @@ class SchedulerConfig:
     trend_check_cron: str = "*/30 * * * *"
     trend_keywords: List[str] = field(default_factory=list)
     trend_sources: List[str] = field(default_factory=lambda: ["weibo"])
-    trend_auto_generate: bool = False
+    # 热点评估配置
+    trend_min_confidence: int = 60  # LLM 评估最低置信度
 
     @classmethod
     def from_yaml(cls, path: str) -> "SchedulerConfig":
@@ -59,7 +60,7 @@ class SchedulerConfig:
             trend_check_cron=data.get("trend_check_cron", "*/30 * * * *"),
             trend_keywords=trend_keywords,
             trend_sources=trend_sources,
-            trend_auto_generate=data.get("trend_auto_generate", False),
+            trend_min_confidence=data.get("trend_min_confidence", 60),
         )
 
     @classmethod
@@ -85,5 +86,5 @@ class SchedulerConfig:
             trend_check_cron=os.getenv("AGENT_TREND_CRON", "*/30 * * * *"),
             trend_keywords=trend_keywords,
             trend_sources=trend_sources,
-            trend_auto_generate=os.getenv("AGENT_TREND_AUTO_GENERATE", "false").lower() in ("1", "true", "yes", "on"),
+            trend_min_confidence=int(os.getenv("AGENT_TREND_MIN_CONFIDENCE", "60")),
         )
