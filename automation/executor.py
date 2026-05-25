@@ -125,7 +125,7 @@ class PublishExecutor:
     @staticmethod
     def _get_due_items() -> List[QueueItem]:
         from agents.store import _get_conn
-        now = datetime.now().isoformat()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = _get_conn()
         rows = conn.execute(
             """
