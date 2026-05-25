@@ -773,6 +773,100 @@ def _handle_agent_mode(args):
             print(f"{r['task_id']:<20} {r['platform']:<12} {r['overall_score']:<8} {r['created_at']}")
         return
 
+    # ---- ReAct Agent ----
+    if args.react:
+        _run_react_mode(args)
+        return
+
+
+def _run_react_mode(args):
+    """运行 ReAct Agent 模式"""
+    from agents.react_agent import ReActAgent
+    from agents.store import _get_conn
+    import datetime
+
+    # 获取笔记内容
+    raw_notes = ""
+    if args.note_file:
+        with open(args.note_file, "r", encoding="utf-8") as f:
+            raw_notes = f.read()
+        print(f"📄 从文件读取笔记: {args.note_file}")
+    elif args.note_content:
+        raw_notes = args.note_content
+        print("📝 使用直接输入的笔记内容")
+    elif args.vault_note:
+        vault_path = os.getenv("VAULT_PATH", ".")
+        note_path = Path(vault_path) / args.vault_note
+        if note_path.exists():
+            with open(note_path, "r", encoding="utf-8") as f:
+                raw_notes = f.read()
+            print(f"📄 从 Vault 读取笔记: {note_path}")
+        else:
+            print(f"❌ Vault 笔记不存在: {note_path}")
+            sys.exit(1)
+    else:
+        print("❌ 请提供笔记内容（--note-file / --note-content / --vault-note）")
+        sys.exit(1)
+
+    # 解析平台
+    platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else ["gongzhonghao"]
+    print(f"🎯 目标平台: {', '.join(platforms)}")
+
+    # 运行 ReAct Agent
+    print("\n🚀 启动 ReAct Agent...")
+    agent = ReActAgent(max_steps=3)
+    result = agent.run(raw_notes, platforms)
+
+    print(f"\n✅ 生成完成！")
+    print(f"步骤数: {len(result.steps)}")
+    for i, step in enumerate(result.steps):
+        print(f"  Step {i+1}: {step.thought[:60]}...")
+
+    # 显示内容预览
+    print(f"\n📊 生成结果:")
+    for platform in platforms:
+        content = getattr(result.content, platform, "")
+        print(f"  {platform}: {len(content)} 字")
+
+    # 保存到文件
+    output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for platform in platforms:
+        content = getattr(result.content, platform, "")
+        if content:
+            file_path = output_dir / f"{platform}.md"
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            print(f"  💾 已保存: {file_path}")
+
+    # 自动发布（公众号）
+    if args.publish and "gongzhonghao" in platforms:
+        print("\n📤 自动发布公众号...")
+        from content_agent.publisher import publish_wechat_draft
+        import tempfile
+
+        content = result.content.gongzhonghao
+        lines = content.split("\n")
+        title = lines[0].replace("#", "").strip() if lines else "ReAct 生成内容"
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write(content)
+            temp_path = f.name
+
+        cover = os.getenv("WECHAT_DEFAULT_COVER", "")
+        pub_result = publish_wechat_draft(temp_path, title=title, cover_path=cover)
+
+        import os as os2
+        os2.unlink(temp_path)
+
+        if pub_result.get("success"):
+            print(f"✅ 发布成功！media_id: {pub_result.get('details', '')[-50:]}")
+        else:
+            print(f"❌ 发布失败: {pub_result.get('error', '未知错误')}")
+
+    print(f"\n📂 输出目录: {output_dir}")
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -872,6 +966,13 @@ def main():
     parser.add_argument("--eval-regression", action="store_true", help="运行回归测试")
     parser.add_argument("--eval-report", action="store_true", help="查看最近的回归测试报告")
 
+    # ReAct Agent
+    parser.add_argument("--react", action="store_true", help="使用 ReAct Agent 生成内容")
+    parser.add_argument("--note-file", help="指定笔记文件路径")
+    parser.add_argument("--note-content", help="直接输入笔记内容")
+    parser.add_argument("--vault-note", help="从 Vault 读取笔记文件名")
+    parser.add_argument("--publish", action="store_true", help="生成后自动发布（公众号）")
+
     args = parser.parse_args()
 
     # Phase 0: 初始化 SQLite
@@ -893,6 +994,7 @@ def main():
         args.reject_topic, args.execute_topics, args.trend_pipeline,
         args.generate_ab, args.ab_results,
         args.eval_regression, args.eval_report,
+        args.react,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:
