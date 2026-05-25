@@ -319,9 +319,14 @@ class TopicExecutor:
     # 公共方法
     # ------------------------------------------------------------------
     def _queue_content(self, state, final, platforms: list[str], note_path: str, raw_notes: str) -> int:
-        """将生成的内容入队"""
+        """将生成的内容入队，并自动智能排期"""
         queued = 0
         content_dict = final.to_content_dict()
+
+        # 智能排期
+        from automation.smart_scheduler.smart_scheduler import SmartScheduler
+        smart_scheduler = SmartScheduler()
+
         for platform in platforms:
             text = content_dict.get(platform, "")
             if not text:
@@ -329,6 +334,7 @@ class TopicExecutor:
             title = extract_title(text)
             tags = final.recommended_tags or ""
             try:
+                # 入队
                 PublishQueue.add(
                     task_id=state.task_id,
                     platform=platform,
@@ -338,8 +344,28 @@ class TopicExecutor:
                     note_source=note_path,
                 )
                 queued += 1
+
+                # 自动排期
+                try:
+                    # 获取刚入队的队列项 ID
+                    conn = _get_conn()
+                    row = conn.execute(
+                        "SELECT id FROM publish_queue WHERE task_id = ? AND platform = ? ORDER BY created_at DESC LIMIT 1",
+                        (state.task_id, platform),
+                    ).fetchone()
+                    conn.close()
+                    if row:
+                        queue_id = row["id"]
+                        scheduled = smart_scheduler.auto_schedule(queue_id, platform, days_ahead=1)
+                        if scheduled:
+                            print(f"[TopicExecutor] 已自动排期 [{platform}]: {scheduled}")
+                except Exception as e:
+                    print(f"[TopicExecutor] 自动排期失败 [{platform}]: {e}")
+
             except Exception as e:
                 print(f"[TopicExecutor] 入队失败 [{platform}]: {e}")
+
+        smart_scheduler.close()
 
         # 记录风格样本
         try:

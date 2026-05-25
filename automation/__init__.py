@@ -18,11 +18,11 @@ from automation.retry import RetryPolicy
 from automation.xiaohongshu_publisher import XiaohongshuPublisher
 from automation.config import SchedulerConfig
 from automation.scheduler import TaskScheduler
-
 from automation.trend_scheduler import TrendScheduler
-
 from automation.topic_executor import TopicExecutor
 
+# 智能排期
+from automation.smart_scheduler.smart_scheduler import SmartScheduler
 __all__ = [
     "VaultWatcher",
     "AgentController",
@@ -43,6 +43,7 @@ __all__ = [
     "XiaohongshuPublisher",
     "SchedulerConfig",
     "TaskScheduler",
+    "SmartScheduler",
     "TrendScheduler",
     "TopicExecutor",
 ]
