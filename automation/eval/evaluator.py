@@ -27,6 +27,7 @@ class ContentEvaluator:
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
         latency_ms: int = 0,
+        trending_hint: str = "",
     ) -> dict:
         """
         评估内容并保存结果
@@ -41,12 +42,17 @@ class ContentEvaluator:
         """
         start = time.time()
 
-        # 1. LLM 打分
+        # 1. LLM 打分（多维度）
         print(f"[Evaluator] 开始评估 ({platform})...")
-        scores = self.judge.evaluate(content, topic)
+        scores = self.judge.evaluate(
+            content=content,
+            topic=topic,
+            platform=platform,
+            trending_hint=trending_hint,
+        )
 
-        # 2. 规则检查
-        rules = self._check_rules(content)
+        # 2. 规则检查（完善版）
+        rules = self._check_rules(content, platform)
 
         # 3. 保存到数据库
         eval_id = f"eval_{hashlib.md5(f'{task_id}:{platform}:{time.time()}'.encode()).hexdigest()[:12]}"
@@ -60,13 +66,20 @@ class ContentEvaluator:
             "readability_score": scores["readability"],
             "originality_score": scores["originality"],
             "practicality_score": scores["practicality"],
+            "platform_fit_score": scores.get("platform_fit", 0),
+            "trend_match_score": scores.get("trend_match", 0),
             "overall_score": scores["overall"],
             "word_count": rules["word_count"],
+            "char_count": rules["char_count"],
+            "paragraph_count": rules["paragraph_count"],
+            "emoji_count": rules["emoji_count"],
+            "tag_count": rules["tag_count"],
             "has_sensitive_words": rules["has_sensitive_words"],
             "has_link": rules["has_link"],
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "latency_ms": latency_ms,
+            "eval_latency_ms": 0,
             "model": model,
             "eval_model": self.judge.model,
         }
@@ -83,21 +96,67 @@ class ContentEvaluator:
             "saved": saved,
         }
 
-    def _check_rules(self, content: str) -> dict:
-        """规则检查"""
+    def _check_rules(self, content: str, platform: str = "") -> dict:
+        """规则检查（完善版）"""
         import re
 
-        # 敏感词检查（简单版本）
+        # 基础统计
+        char_count = len(content)
+        word_count = len(content.replace(" ", "").replace("\n", ""))
+
+        # 段落数（按空行分割）
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        paragraph_count = len(paragraphs)
+
+        # emoji 数量
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # 表情符号
+            "\U0001F300-\U0001F5FF"  # 符号和象形文字
+            "\U0001F680-\U0001F6FF"  # 交通和地图符号
+            "\U0001F1E0-\U0001F1FF"  # 国旗
+            "\U00002702-\U000027B0"
+            "\U000024C2-\U0001F251"
+            "]+",
+            flags=re.UNICODE,
+        )
+        emoji_count = len(emoji_pattern.findall(content))
+
+        # 标签数量（#标签）
+        tag_pattern = re.compile(r"#\w+")
+        tag_count = len(tag_pattern.findall(content))
+
+        # 敏感词检查
         sensitive_words = ["共产党", "法轮功", "色情", "赌博"]
         has_sensitive = any(w in content for w in sensitive_words)
 
         # 链接检查
         has_link = bool(re.search(r"https?://", content))
 
+        # 平台特定规则
+        platform_rules = {}
+        if platform == "xiaohongshu":
+            platform_rules = {
+                "title_length_ok": 15 <= word_count <= 20,
+                "emoji_ok": 5 <= emoji_count <= 10,
+                "tag_ok": 5 <= tag_count <= 8,
+            }
+        elif platform == "gongzhonghao":
+            platform_rules = {
+                "title_length_ok": 20 <= word_count <= 30,
+                "paragraph_ok": 5 <= paragraph_count <= 10,
+                "tag_ok": 3 <= tag_count <= 5,
+            }
+
         return {
-            "word_count": len(content),
+            "word_count": word_count,
+            "char_count": char_count,
+            "paragraph_count": paragraph_count,
+            "emoji_count": emoji_count,
+            "tag_count": tag_count,
             "has_sensitive_words": has_sensitive,
             "has_link": has_link,
+            **platform_rules,
         }
 
     def _save(self, result: dict) -> bool:
