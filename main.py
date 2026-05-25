@@ -748,6 +748,31 @@ def _handle_agent_mode(args):
             print("⚠️ 无结果数据")
         return
 
+    # ---- Eval 回归测试 ----
+    if args.eval_regression:
+        from automation.eval.regression import RegressionTester
+        tester = RegressionTester()
+        results = tester.run(quick=True)  # 快速模式
+        report = tester.generate_report(results)
+        print(report)
+        return
+
+    if args.eval_report:
+        from automation.eval.regression import RegressionTester
+        from agents.store import _get_conn
+        conn = _get_conn()
+        rows = conn.execute("SELECT * FROM eval_results ORDER BY created_at DESC LIMIT 10").fetchall()
+        conn.close()
+        if not rows:
+            print("📭 暂无评估数据")
+            return
+        print(f"\n最近 {len(rows)} 条评估记录:")
+        print(f"{'Task':<20} {'Platform':<12} {'Overall':<8} {'Time'}")
+        print("-" * 60)
+        for r in rows:
+            print(f"{r['task_id']:<20} {r['platform']:<12} {r['overall_score']:<8} {r['created_at']}")
+        return
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -843,6 +868,10 @@ def main():
     parser.add_argument("--ab-queue-id", help="指定队列项 ID 生成 A/B 变体")
     parser.add_argument("--ab-results", metavar="TASK_ID", help="查看 A/B 测试结果")
 
+    # Eval 回归测试
+    parser.add_argument("--eval-regression", action="store_true", help="运行回归测试")
+    parser.add_argument("--eval-report", action="store_true", help="查看最近的回归测试报告")
+
     args = parser.parse_args()
 
     # Phase 0: 初始化 SQLite
@@ -863,6 +892,7 @@ def main():
         args.show_profile, args.pick_topics, args.topics, args.accept_topic,
         args.reject_topic, args.execute_topics, args.trend_pipeline,
         args.generate_ab, args.ab_results,
+        args.eval_regression, args.eval_report,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:
