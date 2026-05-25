@@ -251,7 +251,16 @@ class TopicExecutor:
         output_dir.mkdir(parents=True, exist_ok=True)
         html_path = renderer.render(content, output_dir)
 
-        # 3. 入队（抖音平台存 HTML 路径）
+        # 3. 自动截图
+        try:
+            from content_agent.screenshot import html_to_png
+            png_path = html_to_png(html_path, width=1080, height=1920)
+            print(f"[TopicExecutor] 抖音图文截图: {png_path}")
+        except Exception as e:
+            print(f"[TopicExecutor] 截图失败（不影响入队）: {e}")
+            png_path = None
+
+        # 4. 入队（抖音平台存 HTML 路径）
         try:
             PublishQueue.add(
                 task_id=task_id,
@@ -259,7 +268,7 @@ class TopicExecutor:
                 title=topic["title"],
                 content=content,
                 tags="AI,科技,资讯",
-                note_source=html_path,
+                note_source=png_path or html_path,
             )
             queued = 1
         except Exception as e:
