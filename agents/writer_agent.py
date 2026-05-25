@@ -61,7 +61,7 @@ DRAFT_SYSTEM_PROMPT = """你是一位全平台内容专家，擅长把技术学�
 【抖音口播脚本】
 - 开头前3秒必须有强钩子
 - 每句话不超过15个字，短句排比
-- 口语化，用"我"“你"“大家"等称呼
+- 口语化，用"我""你""大家"等称呼
 - 带画面提示（【镜头切到代码】【切换到页面】）
 - 中间有转折或悬念，尾部有行动号召
 - 全文200-400字，适合2-3分钟口播
@@ -81,6 +81,18 @@ DRAFT_SYSTEM_PROMPT = """你是一位全平台内容专家，擅长把技术学�
 要求：标签必须与笔记内容高度相关，避免泛泛而谈的热门词。
 
 核心原则：三个平台都必须基于同一份学习笔记，不编造内容，不流于表面，读者看完能复现学习路径。"""
+
+
+# 风格画像追加模板
+STYLE_PROFILE_APPENDIX = """
+
+【风格画像参考】
+根据历史数据分析，该平台高表现内容的特征如下：
+- 语气特征：{preferred_tone}
+- 高表现模式：{patterns}
+- 平均互动分：{avg_score}
+
+请优先采用上述高表现模式，生成符合平台偏好的内容。"""
 
 
 REFINE_SYSTEM_PROMPT = """你是一位资深编辑，根据审稿意见修改文案。
@@ -278,6 +290,32 @@ class WriterAgent:
         # 并发模式用的单平台 Agent（情性初始化，避免非并发模式下的额外开销）
         self._platform_agents: dict[str, PlatformWriterAgent] = {}
 
+    def _load_style_profile(self, platform: str) -> str:
+        """加载平台风格画像，追加到 system prompt"""
+        try:
+            from automation.feedback_agent import FeedbackAgent
+            agent = FeedbackAgent()
+            profile = agent.get_profile(platform)
+            if profile and profile.sample_count >= 5:
+                patterns = "、".join(profile.high_performing_patterns[:5])
+                return STYLE_PROFILE_APPENDIX.format(
+                    preferred_tone=profile.preferred_tone,
+                    patterns=patterns,
+                    avg_score=profile.avg_score,
+                )
+        except Exception:
+            pass
+        return ""
+
+    def _build_draft_prompt(self, raw_notes: str, platforms: List[str]) -> str:
+        """构建初稿 prompt，包含风格画像"""
+        prompt = raw_notes
+        for platform in platforms:
+            profile_text = self._load_style_profile(platform)
+            if profile_text:
+                prompt += f"\n\n【{platform} 风格画像】{profile_text}"
+        return prompt
+
     def _get_platform_agent(self, platform: str) -> PlatformWriterAgent:
         if platform not in self._platform_agents:
             self._platform_agents[platform] = PlatformWriterAgent(platform, self.model)
@@ -297,8 +335,9 @@ class WriterAgent:
             concurrent: 是否按平台并发生成。默认 False（单次调用生成三平台）。
         """
         if not concurrent or len(platforms) <= 1:
-            # 非并发模式：保持现有行为
-            result = self._draft_agent.run_sync(raw_notes)
+            # 非并发模式：保持现有行为，追加风格画像
+            prompt = self._build_draft_prompt(raw_notes, platforms)
+            result = self._draft_agent.run_sync(prompt)
             return result.output
 
         # 并发模式：每个平台独立调用
