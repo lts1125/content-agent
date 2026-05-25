@@ -63,13 +63,13 @@ class FeedbackAgent:
             model, _ = ModelConfig.from_env()
         self.model = model
 
-    def import_metrics(self, file_path: Path) -> dict:
-        """导入平台数据（CSV 或 JSON），返回统计信息"""
+    def import_metrics(self, file_path: Path, platform: Optional[str] = None) -> dict:
+        """导入平台数据（CSV 或 JSON），返回统计信息，并自动判断是否触发分析"""
         imported = 0
         errors = []
 
         if not file_path.exists():
-            return {"imported": 0, "errors": [f"文件不存在: {file_path}"]}
+            return {"imported": 0, "errors": [f"文件不存在: {file_path}"], "should_analyze": False}
 
         suffix = file_path.suffix.lower()
         if suffix == ".csv":
@@ -77,13 +77,30 @@ class FeedbackAgent:
         elif suffix in (".json", ".jsonl"):
             rows = self._parse_json(file_path)
         else:
-            return {"imported": 0, "errors": [f"不支持的文件格式: {suffix}"]}
+            return {"imported": 0, "errors": [f"不支持的文件格式: {suffix}"], "should_analyze": False}
 
         import_date = datetime.now().isoformat()
         conn = _get_conn()
         for row in rows:
             try:
                 mid = f"metric_{uuid.uuid4().hex[:12]}"
+                
+                # 自动识别平台（如果未指定）
+                pf = platform or row.get("platform", "")
+                if not pf:
+                    if "read_count" in row or "reads" in row:
+                        pf = "gongzhonghao"
+                    elif "collect_count" in row or "collects" in row:
+                        pf = "xiaohongshu"
+                    else:
+                        pf = "unknown"
+                
+                reads = int(row.get("read_count") or row.get("reads") or 0)
+                likes = int(row.get("like_count") or row.get("likes") or 0)
+                shares = int(row.get("share_count") or row.get("shares") or 0)
+                comments = int(row.get("comment_count") or row.get("comments") or 0)
+                collects = int(row.get("collect_count") or row.get("collects") or 0)
+                
                 conn.execute(
                     """
                     INSERT INTO content_metrics
@@ -93,12 +110,12 @@ class FeedbackAgent:
                     (
                         mid,
                         row.get("queue_item_id", ""),
-                        row.get("platform", ""),
-                        int(row.get("reads", 0) or 0),
-                        int(row.get("likes", 0) or 0),
-                        int(row.get("shares", 0) or 0),
-                        int(row.get("comments", 0) or 0),
-                        int(row.get("collects", 0) or 0),
+                        pf,
+                        reads,
+                        likes,
+                        shares,
+                        comments,
+                        collects,
                         import_date,
                         row.get("publish_date", ""),
                     ),
@@ -108,7 +125,75 @@ class FeedbackAgent:
                 errors.append(str(e))
         conn.commit()
         conn.close()
-        return {"imported": imported, "errors": errors}
+        
+        # 判断是否触发分析
+        should_analyze = False
+        if imported > 0 and platform:
+            should_analyze = self._should_analyze(platform)
+        
+        return {"imported": imported, "errors": errors, "should_analyze": should_analyze}
+    
+    def _should_analyze(self, platform: str) -> bool:
+        """判断是否应该触发分析"""
+        conn = _get_conn()
+        
+        # 1. 检查样本数量
+        count_row = conn.execute(
+            "SELECT COUNT(*) as cnt FROM content_metrics WHERE platform = ?",
+            (platform,),
+        ).fetchone()
+        total_samples = count_row["cnt"] if count_row else 0
+        
+        if total_samples < 5:
+            conn.close()
+            print(f"[FeedbackAgent] 平台 '{platform}' 样本不足 ({total_samples} 条)，继续积累")
+            return False
+        
+        # 2. 检查上次分析时间
+        profile_row = conn.execute(
+            "SELECT updated_at FROM style_profiles WHERE platform = ?",
+            (platform,),
+        ).fetchone()
+        
+        if profile_row and profile_row["updated_at"]:
+            last_update = datetime.fromisoformat(profile_row["updated_at"])
+            days_since = (datetime.now() - last_update).days
+            if days_since < 7:
+                # 3. 检查新数据占比
+                new_count = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM content_metrics WHERE platform = ? AND import_date > ?",
+                    (platform, profile_row["updated_at"]),
+                ).fetchone()["cnt"]
+                new_ratio = new_count / total_samples if total_samples > 0 else 0
+                
+                if new_ratio < 0.3:
+                    conn.close()
+                    print(f"[FeedbackAgent] 平台 '{platform}' 新数据占比 {new_ratio:.1%}，不足 30%，跳过分析")
+                    return False
+        
+        # 4. 检查表现差异
+        if profile_row:
+            avg_row = conn.execute(
+                "SELECT AVG(reads + likes * 2 + shares * 3 + comments * 2 + collects * 2) as avg_score FROM content_metrics WHERE platform = ?",
+                (platform,),
+            ).fetchone()
+            current_avg = avg_row["avg_score"] if avg_row and avg_row["avg_score"] else 0
+            
+            profile_avg = conn.execute(
+                "SELECT avg_score FROM style_profiles WHERE platform = ?",
+                (platform,),
+            ).fetchone()["avg_score"]
+            
+            if profile_avg and profile_avg > 0:
+                diff = abs(current_avg - profile_avg) / profile_avg
+                if diff < 0.2:
+                    conn.close()
+                    print(f"[FeedbackAgent] 平台 '{platform}' 表现差异 {diff:.1%}，不足 20%，跳过分析")
+                    return False
+        
+        conn.close()
+        print(f"[FeedbackAgent] 平台 '{platform}' 满足分析条件，触发分析")
+        return True
 
     @staticmethod
     def _parse_csv(file_path: Path) -> List[dict]:
