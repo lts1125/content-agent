@@ -858,9 +858,9 @@ def _run_react_mode(args):
             f.write(content)
             temp_path = f.name
 
-        cover = os.getenv("WECHAT_DEFAULT_COVER", "")
+        cover = args.cover or os.getenv("WECHAT_DEFAULT_COVER", "")
         if not cover:
-            print("⚠️ 未设置 WECHAT_DEFAULT_COVER 环境变量，发布可能失败")
+            print("⚠️ 未设置封面图片（--cover 或 WECHAT_DEFAULT_COVER），发布可能失败")
         
         try:
             pub_result = publish_wechat_draft(temp_path, title=title, cover_path=cover)
@@ -986,6 +986,7 @@ def main():
     parser.add_argument("--note-content", help="直接输入笔记内容")
     parser.add_argument("--vault-note", help="从 Vault 读取笔记文件名")
     parser.add_argument("--publish", action="store_true", help="生成后自动发布（公众号）")
+    parser.add_argument("--cover", help="指定公众号封面图片路径")
 
     args = parser.parse_args()
 
