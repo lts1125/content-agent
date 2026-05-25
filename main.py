@@ -1057,7 +1057,7 @@ def main():
         args.reject_topic, args.execute_topics, args.trend_pipeline,
         args.generate_ab, args.ab_results,
         args.eval_regression, args.eval_report,
-        args.react,
+        args.react, args.publish_file,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:
