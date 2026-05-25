@@ -887,6 +887,16 @@ def _run_react_mode(args):
                 f.write(content)
             print(f"  💾 已保存: {file_path}")
 
+    # 生成小红书配图
+    if "xiaohongshu" in platforms:
+        try:
+            from content_agent.html_renderer import XiaohongshuRenderer
+            renderer = XiaohongshuRenderer()
+            html_path = renderer.render(result.content.xiaohongshu, output_dir / "配图")
+            print(f"  🎨 小红书配图已生成: {Path(html_path).name}")
+        except Exception as e:
+            print(f"  ⚠️ 配图生成失败: {e}")
+
     # 自动发布（公众号）
     if args.publish and "gongzhonghao" in platforms:
         print("\n📤 自动发布公众号...")
