@@ -778,6 +778,53 @@ def _handle_agent_mode(args):
         _run_react_mode(args)
         return
 
+    if args.publish_file:
+        _publish_file_mode(args)
+        return
+
+
+def _publish_file_mode(args):
+    """直接发布已生成的 Markdown 文件"""
+    from content_agent.publisher import publish_wechat_draft
+    from pathlib import Path
+
+    file_path = Path(args.publish_file)
+    if not file_path.exists():
+        print(f"❌ 文件不存在: {file_path}")
+        sys.exit(1)
+
+    print(f"📄 读取文件: {file_path}")
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 提取标题
+    lines = content.split("\n")
+    title = lines[0].replace("#", "").strip() if lines else "发布内容"
+
+    print(f"📝 标题: {title}")
+    print(f"📊 内容长度: {len(content)} 字")
+
+    # 发布
+    cover = args.cover or os.getenv("WECHAT_DEFAULT_COVER", "")
+    if not cover:
+        print("⚠️ 未设置封面图片（--cover 或 WECHAT_DEFAULT_COVER）")
+        response = input("是否继续发布? [y/N]: ")
+        if response.lower() != "y":
+            print("已取消")
+            return
+
+    print("\n📤 发布到公众号...")
+    try:
+        result = publish_wechat_draft(str(file_path), title=title, cover_path=cover)
+        if result.get("success"):
+            print(f"✅ 发布成功！")
+            print(f"   media_id: {result.get('details', '')[-50:]}")
+        else:
+            print(f"❌ 发布失败: {result.get('error', '未知错误')}")
+            print(f"   详情: {result.get('details', '')}")
+    except Exception as e:
+        print(f"❌ 发布异常: {e}")
+
 
 def _run_react_mode(args):
     """运行 ReAct Agent 模式"""
@@ -987,6 +1034,7 @@ def main():
     parser.add_argument("--vault-note", help="从 Vault 读取笔记文件名")
     parser.add_argument("--publish", action="store_true", help="生成后自动发布（公众号）")
     parser.add_argument("--cover", help="指定公众号封面图片路径")
+    parser.add_argument("--publish-file", help="直接发布已生成的 Markdown 文件（不重新生成）")
 
     args = parser.parse_args()
 
