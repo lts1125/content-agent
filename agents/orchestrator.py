@@ -62,7 +62,39 @@ class Orchestrator:
         state.metadata["duration_sec"] = round(
             state.metadata["finished_at"] - state.metadata["started_at"], 2
         )
+
+        # 4. Eval 评估
+        self._run_eval(state, task_input)
+
         return state
+
+    def _run_eval(self, state: TaskState, inp: TaskInput):
+        """运行 Eval 评估"""
+        try:
+            from automation.eval.evaluator import ContentEvaluator
+
+            evaluator = ContentEvaluator()
+            output = state.final_output
+            if not output:
+                return
+
+            for platform in inp.platforms:
+                content = getattr(output, platform, "")
+                if not content:
+                    continue
+
+                evaluator.evaluate(
+                    content=content,
+                    platform=platform,
+                    topic=inp.note_source or "",
+                    task_id=state.task_id,
+                    model=state.metadata.get("model", ""),
+                    prompt_tokens=state.metadata.get("prompt_tokens", 0),
+                    completion_tokens=state.metadata.get("completion_tokens", 0),
+                    latency_ms=int(state.metadata.get("duration_sec", 0) * 1000),
+                )
+        except Exception as e:
+            print(f"[Orchestrator] Eval 评估失败: {e}")
 
     # ------------------------------------------------------------------
     # 纯规则计划

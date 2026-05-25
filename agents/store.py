@@ -223,6 +223,39 @@ def init_ab_test_variants_table():
     conn.close()
 
 
+def init_eval_results_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS eval_results (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            platform TEXT,
+            content_hash TEXT,
+            relevance_score INTEGER,
+            readability_score INTEGER,
+            originality_score INTEGER,
+            practicality_score INTEGER,
+            overall_score REAL,
+            word_count INTEGER,
+            has_sensitive_words BOOLEAN,
+            has_link BOOLEAN,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            latency_ms INTEGER,
+            model TEXT,
+            eval_model TEXT,
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_eval_task ON eval_results(task_id);
+        CREATE INDEX IF NOT EXISTS idx_eval_platform ON eval_results(platform);
+        CREATE INDEX IF NOT EXISTS idx_eval_created ON eval_results(created_at);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def init_db():
     """初始化表结构（幂等）"""
     conn = _get_conn()
@@ -284,6 +317,7 @@ def init_db():
     init_style_profiles_table()
     init_topic_suggestions_table()
     init_ab_test_variants_table()
+    init_eval_results_table()
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)
