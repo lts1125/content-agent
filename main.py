@@ -847,6 +847,10 @@ def _run_react_mode(args):
         import tempfile
 
         content = result.content.gongzhonghao
+        if not content:
+            print("❌ 公众号内容为空，无法发布")
+            return
+
         lines = content.split("\n")
         title = lines[0].replace("#", "").strip() if lines else "ReAct 生成内容"
 
@@ -855,15 +859,25 @@ def _run_react_mode(args):
             temp_path = f.name
 
         cover = os.getenv("WECHAT_DEFAULT_COVER", "")
-        pub_result = publish_wechat_draft(temp_path, title=title, cover_path=cover)
+        if not cover:
+            print("⚠️ 未设置 WECHAT_DEFAULT_COVER 环境变量，发布可能失败")
+        
+        try:
+            pub_result = publish_wechat_draft(temp_path, title=title, cover_path=cover)
+            
+            import os as os2
+            os2.unlink(temp_path)
 
-        import os as os2
-        os2.unlink(temp_path)
-
-        if pub_result.get("success"):
-            print(f"✅ 发布成功！media_id: {pub_result.get('details', '')[-50:]}")
-        else:
-            print(f"❌ 发布失败: {pub_result.get('error', '未知错误')}")
+            if pub_result.get("success"):
+                print(f"✅ 发布成功！media_id: {pub_result.get('details', '')[-50:]}")
+            else:
+                print(f"❌ 发布失败: {pub_result.get('error', '未知错误')}")
+                print(f"详情: {pub_result.get('details', '')}")
+        except Exception as e:
+            print(f"❌ 发布异常: {e}")
+            import os as os2
+            if os2.path.exists(temp_path):
+                os2.unlink(temp_path)
 
     print(f"\n📂 输出目录: {output_dir}")
 
