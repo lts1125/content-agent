@@ -172,7 +172,9 @@ class EvaluateTool(BaseTool):
         try:
             if self.editor_agent is None:
                 from agents.editor_agent import EditorAgent
-                self.editor_agent = EditorAgent()
+                from agents.writer_agent import _ModelConfig
+                model, _ = _ModelConfig.from_env()
+                self.editor_agent = EditorAgent(model)
             
             xiaohongshu = kwargs.get("xiaohongshu", "")
             gongzhonghao = kwargs.get("gongzhonghao", "")
