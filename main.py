@@ -895,7 +895,17 @@ def _run_react_mode(args):
             html_path = renderer.render(result.content.xiaohongshu, output_dir / "配图")
             print(f"  🎨 小红书配图已生成: {Path(html_path).name}")
         except Exception as e:
-            print(f"  ⚠️ 配图生成失败: {e}")
+            print(f"  ⚠️ 小红书配图生成失败: {e}")
+
+    # 生成抖音配图
+    if "douyin" in platforms:
+        try:
+            from content_agent.douyin_renderer import DouyinRenderer
+            renderer = DouyinRenderer()
+            html_path = renderer.render(result.content.douyin, output_dir / "配图")
+            print(f"  🎨 抖音配图已生成: {Path(html_path).name}")
+        except Exception as e:
+            print(f"  ⚠️ 抖音配图生成失败: {e}")
 
     # 自动发布（公众号）
     if args.publish and "gongzhonghao" in platforms:
