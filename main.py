@@ -872,7 +872,16 @@ def _run_react_mode(args):
         sys.exit(1)
 
     # 解析平台
-    platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else ["gongzhonghao"]
+    PLATFORM_MAP = {
+        "公众号": "gongzhonghao",
+        "微信": "gongzhonghao",
+        "小红书": "xiaohongshu",
+        "抖音": "douyin",
+    }
+    platforms = []
+    for p in (args.platforms or "gongzhonghao").split(","):
+        p = p.strip()
+        platforms.append(PLATFORM_MAP.get(p, p))
     print(f"🎯 目标平台: {', '.join(platforms)}")
 
     # 运行 Agent

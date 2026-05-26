@@ -309,11 +309,72 @@ class WriterAgent:
 
     def _build_draft_prompt(self, raw_notes: str, platforms: List[str]) -> str:
         """构建初稿 prompt，包含风格画像"""
-        prompt = raw_notes
+        # 根据平台列表构建平台特定 prompt
+        platform_prompts = {
+            "xiaohongshu": """【小红书笔记】
+- 标题吸睛，带emoji和数字
+- 开头一句话点出动机
+- 正文分步骤，每步带emoji编号，每步简洁明了
+- 保留核心概念和踩坑记录，但大白话解释
+- 结尾金句总结 + 互动问句
+- 添加3-5个话题标签（#xxx 格式）
+- 全文300-600字""",
+            "gongzhonghao": """【公众号文章】
+- 标题正式，可带副标题
+- 开头用导言引入，讲背景和动机
+- 正文分大章节，用## 标题分隔
+- 每个步骤详细展开：有原理解释、代码示例、实际场景
+- 包含具体的命令行代码块
+- 有"总结"和"下一步"部分
+- 全文1500-2500字，信息密度高""",
+            "douyin": """【抖音口播脚本】
+- 开头前3秒必须有强钩子
+- 每句话不超过15个字，短句排比
+- 口语化，用"我""你""大家"等称呼
+- 带画面提示（【镜头切到代码】【切换到页面】）
+- 中间有转折或悬念，尾部有行动号召
+- 全文200-400字，适合2-3分钟口播""",
+        }
+        
+        prompt = f"""你是一位全平台内容专家，擅长把技术学习笔记改写成指定平台的文案。
+
+输入是程序员的学习笔记，输出必须包含以下平台的文案和推荐标签：
+
+"""
+        for platform in platforms:
+            if platform in platform_prompts:
+                prompt += f"\n{platform_prompts[platform]}\n"
+        
+        prompt += """
+
+【推荐标签/话题】
+请基于笔记内容，额外输出各平台的推荐标签/话题，格式如下：
+
+📱 小红书（5-8个）：
+#标签1 #标签2 #标签3 ...
+
+💬 公众号（3-5个关键词）：
+关键词1、关键词2、关键词3 ...
+
+🎥 抖音（3-5个）：
+#话题1 #话题2 #话题3 ...
+
+要求：标签必须与笔记内容高度相关，避免泛泛而谈的热门词。
+
+核心原则：内容必须基于学习笔记，不编造内容，不流于表面，读者看完能复现学习路径。
+
+---
+
+笔记内容：
+"""
+        prompt += raw_notes
+        
+        # 追加风格画像
         for platform in platforms:
             profile_text = self._load_style_profile(platform)
             if profile_text:
                 prompt += f"\n\n【{platform} 风格画像】{profile_text}"
+        
         return prompt
 
     def _get_platform_agent(self, platform: str) -> PlatformWriterAgent:
