@@ -859,33 +859,62 @@ def _run_react_mode(args):
     platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else ["gongzhonghao"]
     print(f"🎯 目标平台: {', '.join(platforms)}")
 
-    # 运行 ReAct Agent
-    print("\n🚀 启动 ReAct Agent...")
-    agent = ReActAgent(max_steps=3)
-    result = agent.run(raw_notes, platforms)
+    # 运行 Agent
+    if args.v2:
+        # 使用新架构（Orchestrator + 多 Agent 协作）
+        print("\n🚀 启动多 Agent 协作模式 (Orchestrator)...")
+        from agents.collaboration.orchestrator import Orchestrator
+        orch = Orchestrator()
+        result = orch.run(raw_notes, platforms)
 
-    print(f"\n✅ 生成完成！")
-    print(f"步骤数: {len(result.steps)}")
-    for i, step in enumerate(result.steps):
-        print(f"  Step {i+1}: {step.thought[:60]}...")
+        # 显示结果
+        print(f"\n✅ 生成完成！")
+        if result.get("content"):
+            for platform in platforms:
+                content = getattr(result["content"], platform, "")
+                if content:
+                    print(f"  {platform}: {len(content)} 字")
 
-    # 显示内容预览
-    print(f"\n📊 生成结果:")
-    for platform in platforms:
-        content = getattr(result.content, platform, "")
-        print(f"  {platform}: {len(content)} 字")
+        # 保存到文件
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 保存到文件
-    output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir.mkdir(parents=True, exist_ok=True)
+        if result.get("content"):
+            for platform in platforms:
+                content = getattr(result["content"], platform, "")
+                if content:
+                    file_path = output_dir / f"{platform}.md"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    print(f"  💾 已保存: {file_path}")
+    else:
+        # 使用旧架构（ReAct Agent）
+        print("\n🚀 启动 ReAct Agent...")
+        agent = ReActAgent(max_steps=3)
+        result = agent.run(raw_notes, platforms)
 
-    for platform in platforms:
-        content = getattr(result.content, platform, "")
-        if content:
-            file_path = output_dir / f"{platform}.md"
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
-            print(f"  💾 已保存: {file_path}")
+        print(f"\n✅ 生成完成！")
+        print(f"步骤数: {len(result.steps)}")
+        for i, step in enumerate(result.steps):
+            print(f"  Step {i+1}: {step.thought[:60]}...")
+
+        # 显示内容预览
+        print(f"\n📊 生成结果:")
+        for platform in platforms:
+            content = getattr(result.content, platform, "")
+            print(f"  {platform}: {len(content)} 字")
+
+        # 保存到文件
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for platform in platforms:
+            content = getattr(result.content, platform, "")
+            if content:
+                file_path = output_dir / f"{platform}.md"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"  💾 已保存: {file_path}")
 
     # 生成小红书配图
     if "xiaohongshu" in platforms:
