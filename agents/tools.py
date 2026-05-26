@@ -130,6 +130,51 @@ class BrowseTool(BaseTool):
             return ToolResult(success=False, data="", error=str(e))
 
 
+class FileReadTool(BaseTool):
+    """文件读取工具 - 读取本地文件"""
+    
+    def __init__(self):
+        super().__init__(
+            name="read",
+            description="读取本地文件内容。参数: path(文件路径)"
+        )
+    
+    def execute(self, path: str) -> ToolResult:
+        """执行文件读取"""
+        try:
+            # 安全检查：限制文件路径
+            allowed_prefixes = [
+                "/Users/lee/content-agent/",
+                "/Users/lee/notes/",
+                "/Users/lee/wechat_doc/",
+            ]
+            
+            # 转换为绝对路径
+            import os
+            abs_path = os.path.abspath(path)
+            
+            # 检查是否在允许的路径下
+            allowed = any(abs_path.startswith(prefix) for prefix in allowed_prefixes)
+            if not allowed:
+                return ToolResult(
+                    success=False,
+                    data="",
+                    error=f"文件路径不在允许范围内: {path}"
+                )
+            
+            # 读取文件
+            with open(abs_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            # 截断过长的内容
+            if len(content) > 5000:
+                content = content[:5000] + "..."
+            
+            return ToolResult(success=True, data=content)
+        except Exception as e:
+            return ToolResult(success=False, data="", error=str(e))
+
+
 class GenerateTool(BaseTool):
     """生成工具 - 生成内容"""
     
@@ -251,6 +296,7 @@ class RAGTool(BaseTool):
 TOOL_REGISTRY: Dict[str, BaseTool] = {
     "search": SearchTool(),
     "browse": BrowseTool(),
+    "read": FileReadTool(),
     "generate": GenerateTool(),
     "evaluate": EvaluateTool(),
     "publish": PublishTool(),
