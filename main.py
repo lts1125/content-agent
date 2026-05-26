@@ -865,13 +865,13 @@ def _run_react_mode(args):
         print("\n🚀 启动多 Agent 协作模式 (Orchestrator)...")
         from agents.collaboration.orchestrator import Orchestrator
         orch = Orchestrator()
-        result = orch.run(raw_notes, platforms)
+        orch_result = orch.run(raw_notes, platforms)
 
         # 显示结果
         print(f"\n✅ 生成完成！")
-        if result.get("content"):
+        if orch_result.get("content"):
             for platform in platforms:
-                content = getattr(result["content"], platform, "")
+                content = getattr(orch_result["content"], platform, "")
                 if content:
                     print(f"  {platform}: {len(content)} 字")
 
@@ -879,29 +879,32 @@ def _run_react_mode(args):
         output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if result.get("content"):
+        if orch_result.get("content"):
             for platform in platforms:
-                content = getattr(result["content"], platform, "")
+                content = getattr(orch_result["content"], platform, "")
                 if content:
                     file_path = output_dir / f"{platform}.md"
                     with open(file_path, "w", encoding="utf-8") as f:
                         f.write(content)
                     print(f"  💾 已保存: {file_path}")
+
+        # 统一 result 变量用于后续配图生成
+        result = orch_result.get("content")
     else:
         # 使用旧架构（ReAct Agent）
         print("\n🚀 启动 ReAct Agent...")
         agent = ReActAgent(max_steps=3)
-        result = agent.run(raw_notes, platforms)
+        react_result = agent.run(raw_notes, platforms)
 
         print(f"\n✅ 生成完成！")
-        print(f"步骤数: {len(result.steps)}")
-        for i, step in enumerate(result.steps):
+        print(f"步骤数: {len(react_result.steps)}")
+        for i, step in enumerate(react_result.steps):
             print(f"  Step {i+1}: {step.thought[:60]}...")
 
         # 显示内容预览
         print(f"\n📊 生成结果:")
         for platform in platforms:
-            content = getattr(result.content, platform, "")
+            content = getattr(react_result.content, platform, "")
             print(f"  {platform}: {len(content)} 字")
 
         # 保存到文件
@@ -909,12 +912,15 @@ def _run_react_mode(args):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         for platform in platforms:
-            content = getattr(result.content, platform, "")
+            content = getattr(react_result.content, platform, "")
             if content:
                 file_path = output_dir / f"{platform}.md"
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(content)
                 print(f"  💾 已保存: {file_path}")
+
+        # 统一 result 变量用于后续配图生成
+        result = react_result.content
 
     # 生成小红书配图
     if "xiaohongshu" in platforms:
