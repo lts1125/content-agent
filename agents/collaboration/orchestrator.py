@@ -55,48 +55,62 @@ class Orchestrator:
             raw_notes=raw_notes
         )
 
-        print(f"[Orchestrator] 开始任务 {task_id}")
+        print(f"\n{'='*60}")
+        print(f"🤖 多 Agent 协作模式 (Orchestrator)")
+        print(f"{'='*60}")
+        print(f"任务ID: {task_id}")
+        print(f"平台: {', '.join(platforms)}")
+        print(f"笔记长度: {len(raw_notes)} 字")
 
         # Phase 1: Researcher 搜集资料
         if "Researcher" in self.agents:
-            print("[Orchestrator] Phase 1: Researcher 搜集资料...")
+            print(f"\n📚 [Phase 1/4] Researcher 搜集资料...")
             research_result = self.agents["Researcher"].run(raw_notes)
             context.research_report = research_result
             context.add_message("Researcher", "Orchestrator", "result", research_result[:200])
+            print(f"   ✅ 资料搜集完成 ({len(research_result)} 字)")
 
         # Phase 2: Writer 生成初稿
         if "Writer" in self.agents:
-            print("[Orchestrator] Phase 2: Writer 生成初稿...")
+            print(f"\n✍️  [Phase 2/4] Writer 生成初稿...")
             writer_input = context.research_report or raw_notes
             draft = self.agents["Writer"].run(writer_input, platforms)
             context.draft_content = draft
             context.add_message("Writer", "Orchestrator", "result", "生成完成")
+            print(f"   ✅ 初稿生成完成")
 
         # Phase 3: Editor 评估 + 迭代修改
         if "Editor" in self.agents and context.draft_content:
-            print("[Orchestrator] Phase 3: Editor 评估...")
+            print(f"\n🔍 [Phase 3/4] Editor 评估...")
             for attempt in range(3):
                 verdict = self._evaluate(context, platforms)
 
                 if verdict.overall >= 80:
-                    print(f"[Orchestrator] 评估通过 (评分: {verdict.overall})")
+                    print(f"   ✅ 评估通过 (评分: {verdict.overall}/100)")
                     break
 
-                print(f"[Orchestrator] 评估未通过 (评分: {verdict.overall})，第{attempt+1}次修改...")
-                context.add_message("Editor", "Writer", "feedback", str(verdict.suggestions[:3]))
+                print(f"   ⚠️  评估未通过 (评分: {verdict.overall}/100)")
+                if verdict.suggestions:
+                    print(f"   💡 建议: {verdict.suggestions[0][:80]}...")
 
-                # Writer 修改
-                if "Writer" in self.agents:
-                    draft = self.agents["Writer"].run(
-                        raw_notes,
-                        platforms,
-                        feedback=verdict.suggestions[0] if verdict.suggestions else ""
-                    )
-                    context.draft_content = draft
+                if attempt < 2:
+                    print(f"   🔄 第{attempt+1}次修改...")
+                    context.add_message("Editor", "Writer", "feedback", str(verdict.suggestions[:3]))
+
+                    # Writer 修改
+                    if "Writer" in self.agents:
+                        draft = self.agents["Writer"].run(
+                            raw_notes,
+                            platforms,
+                            feedback=verdict.suggestions[0] if verdict.suggestions else ""
+                        )
+                        context.draft_content = draft
+                else:
+                    print(f"   ⚠️  已达最大修改次数，使用最后一次结果")
 
         # Phase 4: Designer 设计配图
         if "Designer" in self.agents and context.draft_content:
-            print("[Orchestrator] Phase 4: Designer 设计配图...")
+            print(f"\n🎨 [Phase 4/4] Designer 设计配图...")
             # 并行生成各平台配图
             with ThreadPoolExecutor() as executor:
                 futures = {}
@@ -113,11 +127,15 @@ class Orchestrator:
                 for platform, future in futures.items():
                     try:
                         result = future.result(timeout=60)
+                        print(f"   ✅ {platform} 配图完成")
                         context.add_message("Designer", "Orchestrator", "result", f"{platform}配图完成")
                     except Exception as e:
+                        print(f"   ❌ {platform} 配图失败: {e}")
                         context.add_message("Designer", "Orchestrator", "error", str(e))
 
-        print(f"[Orchestrator] 任务 {task_id} 完成")
+        print(f"\n{'='*60}")
+        print(f"✅ 任务完成 (共 {len(context.history)} 次协作)")
+        print(f"{'='*60}")
 
         return {
             "task_id": task_id,
