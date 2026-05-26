@@ -855,8 +855,20 @@ def _run_react_mode(args):
         else:
             print(f"❌ Vault 笔记不存在: {note_path}")
             sys.exit(1)
+    elif args.topic:
+        # 只提供主题，自动搜索资料
+        print(f"🎯 主题模式: {args.topic}")
+        print("🔍 正在搜索相关资料...")
+        from agents.tools import execute_tool
+        search_result = execute_tool("search", query=args.topic)
+        if search_result.success:
+            raw_notes = f"# {args.topic}\n\n## 搜索资料\n\n{search_result.data}\n\n## 主题\n\n{args.topic}"
+            print(f"✅ 搜索完成 ({len(search_result.data)} 字)")
+        else:
+            print(f"⚠️ 搜索失败: {search_result.error}")
+            raw_notes = f"# {args.topic}\n\n{args.topic}"
     else:
-        print("❌ 请提供笔记内容（--note-file / --note-content / --vault-note）")
+        print("❌ 请提供笔记内容（--note-file / --note-content / --vault-note / --topic）")
         sys.exit(1)
 
     # 解析平台
@@ -1127,6 +1139,7 @@ def main():
     parser.add_argument("--note-file", help="指定笔记文件路径")
     parser.add_argument("--note-content", help="直接输入笔记内容")
     parser.add_argument("--vault-note", help="从 Vault 读取笔记文件名")
+    parser.add_argument("--topic", help="只提供主题，Agent 自动搜索资料并生成")
     parser.add_argument("--publish", action="store_true", help="生成后自动发布（公众号）")
     parser.add_argument("--cover", help="指定公众号封面图片路径")
     parser.add_argument("--publish-file", help="直接发布已生成的 Markdown 文件（不重新生成）")
