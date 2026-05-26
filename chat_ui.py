@@ -354,6 +354,29 @@ def create_chat_ui():
             outputs=[chatbot]
         )
         
+        # 生成内容后，显示发布区域
+        with gr.Accordion("📤 发布到公众号", open=False) as publish_accordion:
+            gr.Markdown("上传封面图片，将生成的公众号文章发布到微信草稿箱")
+            
+            with gr.Row():
+                cover_image = gr.Image(
+                    label="封面图片",
+                    type="filepath",
+                    height=200,
+                )
+            
+            with gr.Row():
+                publish_btn = gr.Button("🚀 发布到公众号草稿箱", variant="primary")
+                publish_status = gr.Textbox(
+                    label="发布状态",
+                    interactive=False,
+                    value="等待发布...",
+                )
+            
+            # 存储最后生成的文件路径
+            last_generated_file = gr.State("")
+            last_generated_title = gr.State("")
+        
         # 使用说明
         with gr.Accordion("📖 使用说明", open=False):
             gr.Markdown("""
@@ -362,6 +385,7 @@ def create_chat_ui():
             1. **直接输入需求**：用自然语言描述你想创作的内容
             2. **指定平台**：可以指定公众号、小红书、抖音中的一个或多个
             3. **等待生成**：Agent 会自动搜索资料、选择策略、生成内容
+            4. **发布公众号**：生成公众号文章后，上传封面图片并点击发布
             
             ### 支持的指令
             
@@ -376,7 +400,93 @@ def create_chat_ui():
             - 描述越详细，生成内容越精准
             - 可以要求特定风格或格式
             - 生成后可以要求修改或调整
+            - 发布公众号需要封面图片（必需）
             """)
+        
+        # 发布功能
+        def publish_to_wechat(cover_path, file_path, title):
+            """发布到微信公众号"""
+            if not cover_path:
+                return "❌ 请上传封面图片"
+            
+            if not file_path or not os.path.exists(file_path):
+                return "❌ 没有可发布的文件，请先生成内容"
+            
+            try:
+                from content_agent.publisher import publish_wechat_draft
+                
+                result = publish_wechat_draft(
+                    markdown_path=file_path,
+                    title=title or "未命名文章",
+                    cover_path=cover_path,
+                )
+                
+                if result.get("success"):
+                    return f"✅ 发布成功！\n{result.get('message', '')}"
+                else:
+                    return f"❌ 发布失败\n{result.get('message', '')}\n{result.get('details', '')}"
+            except Exception as e:
+                return f"❌ 发布异常: {str(e)}"
+        
+        # 修改 respond 函数，保存最后生成的文件
+        def respond_with_save(message, chat_history):
+            """处理用户消息并保存文件路径"""
+            # 添加用户消息
+            chat_history.append({"role": "user", "content": message})
+            
+            # 处理消息
+            result = agent.process_message(message)
+            
+            # 构建响应
+            file_path = ""
+            file_title = ""
+            if result["type"] == "content":
+                response = result["content"]
+                if result.get("files"):
+                    response += "\n\n📁 **生成文件：**\n"
+                    for f in result["files"]:
+                        response += f"- {f}\n"
+                    
+                    # 保存公众号文件路径
+                    for f in result["files"]:
+                        if "gongzhonghao" in f:
+                            file_path = f
+                            # 提取标题
+                            try:
+                                with open(f, 'r', encoding='utf-8') as file:
+                                    first_line = file.readline().strip()
+                                    if first_line.startswith('# '):
+                                        file_title = first_line[2:]
+                            except:
+                                pass
+                            break
+            else:
+                response = result["content"]
+            
+            # 添加助手消息
+            chat_history.append({"role": "assistant", "content": response})
+            
+            return "", chat_history, file_path, file_title
+        
+        # 重新绑定事件
+        send_btn.click(
+            respond_with_save,
+            inputs=[msg_input, chatbot],
+            outputs=[msg_input, chatbot, last_generated_file, last_generated_title]
+        )
+        
+        msg_input.submit(
+            respond_with_save,
+            inputs=[msg_input, chatbot],
+            outputs=[msg_input, chatbot, last_generated_file, last_generated_title]
+        )
+        
+        # 发布按钮事件
+        publish_btn.click(
+            publish_to_wechat,
+            inputs=[cover_image, last_generated_file, last_generated_title],
+            outputs=[publish_status]
+        )
     
     return demo
 
