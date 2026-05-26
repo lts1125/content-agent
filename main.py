@@ -927,7 +927,7 @@ def _run_react_mode(args):
         try:
             from content_agent.html_renderer import XiaohongshuRenderer
             renderer = XiaohongshuRenderer()
-            html_path = renderer.render(result.content.xiaohongshu, output_dir / "配图")
+            html_path = renderer.render(result.xiaohongshu, output_dir / "配图")
             print(f"  🎨 小红书配图已生成: {Path(html_path).name}")
         except Exception as e:
             print(f"  ⚠️ 小红书配图生成失败: {e}")
@@ -937,7 +937,7 @@ def _run_react_mode(args):
         try:
             from content_agent.douyin_renderer import DouyinRenderer
             renderer = DouyinRenderer()
-            html_path = renderer.render(result.content.douyin, output_dir / "配图")
+            html_path = renderer.render(result.douyin, output_dir / "配图")
             print(f"  🎨 抖音配图已生成: {Path(html_path).name}")
         except Exception as e:
             print(f"  ⚠️ 抖音配图生成失败: {e}")
@@ -948,7 +948,7 @@ def _run_react_mode(args):
         from content_agent.publisher import publish_wechat_draft
         import tempfile
 
-        content = result.content.gongzhonghao
+        content = result.gongzhonghao
         if not content:
             print("❌ 公众号内容为空，无法发布")
             return
