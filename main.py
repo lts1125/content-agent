@@ -782,6 +782,10 @@ def _handle_agent_mode(args):
         _publish_file_mode(args)
         return
 
+    if args.autonomous:
+        _run_react_mode(args)
+        return
+
 
 def _publish_file_mode(args):
     """直接发布已生成的 Markdown 文件"""
@@ -890,6 +894,42 @@ def _run_react_mode(args):
 
         # 统一 result 变量用于后续配图生成
         result = orch_result.get("content")
+    elif args.autonomous:
+        # 使用自主规划模式
+        print("\n🚀 启动自主规划模式...")
+        from agents.planning import StrategySelector, AutonomousPlanner
+
+        # 选择策略
+        selector = StrategySelector()
+        strategy = selector.select(raw_notes)
+
+        # 执行规划
+        planner = AutonomousPlanner()
+        plan_result = planner.plan_and_execute(raw_notes, platforms, strategy)
+
+        # 显示结果
+        print(f"\n✅ 生成完成！")
+        if plan_result.get("content"):
+            for platform in platforms:
+                content = getattr(plan_result["content"], platform, "")
+                if content:
+                    print(f"  {platform}: {len(content)} 字")
+
+        # 保存到文件
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if plan_result.get("content"):
+            for platform in platforms:
+                content = getattr(plan_result["content"], platform, "")
+                if content:
+                    file_path = output_dir / f"{platform}.md"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    print(f"  💾 已保存: {file_path}")
+
+        # 统一 result 变量用于后续配图生成
+        result = plan_result.get("content")
     else:
         # 使用旧架构（ReAct Agent）
         print("\n🚀 启动 ReAct Agent...")
@@ -1090,6 +1130,11 @@ def main():
     parser.add_argument("--publish", action="store_true", help="生成后自动发布（公众号）")
     parser.add_argument("--cover", help="指定公众号封面图片路径")
     parser.add_argument("--publish-file", help="直接发布已生成的 Markdown 文件（不重新生成）")
+    parser.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="使用自主规划模式（自动识别内容类型并选择策略）"
+    )
 
     args = parser.parse_args()
 
@@ -1112,7 +1157,7 @@ def main():
         args.reject_topic, args.execute_topics, args.trend_pipeline,
         args.generate_ab, args.ab_results,
         args.eval_regression, args.eval_report,
-        args.react, args.publish_file,
+        args.react, args.publish_file, args.autonomous,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:
