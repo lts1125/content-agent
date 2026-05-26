@@ -2,6 +2,7 @@
 抖音图文渲染器
 
 将热点新闻/科技资讯渲染为 9:16 竖屏图文，适合抖音图文发布。
+保留全部内容，按顺序分配到多张卡片。
 """
 
 import re
@@ -26,7 +27,7 @@ DOUYIN_TEMPLATE = """<!DOCTYPE html>
         }
         .card {
             width: 1080px;
-            height: 1920px;
+            min-height: 1920px;
             background: #141414;
             border-radius: 24px;
             padding: 80px 60px;
@@ -76,79 +77,36 @@ DOUYIN_TEMPLATE = """<!DOCTYPE html>
             color: #444;
         }
 
-        /* 要点卡片 */
-        .point-card {
+        /* 内容卡片 */
+        .content-card {
             background: #1a1a1a;
         }
-        .point-card-header {
-            display: flex;
-            align-items: center;
-            margin-bottom: 50px;
-        }
-        .point-num {
-            width: 56px;
-            height: 56px;
-            background: #fe2c55;
-            color: #fff;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 28px;
-            font-weight: 800;
-            margin-right: 24px;
-            flex-shrink: 0;
-        }
-        .point-title {
-            font-size: 44px;
+        .content-card h2 {
+            font-size: 40px;
             font-weight: 800;
             color: #fff;
+            margin-bottom: 30px;
+            padding-bottom: 15px;
+            border-bottom: 3px solid #fe2c55;
         }
-        .point-items {
-            display: flex;
-            flex-direction: column;
-            gap: 28px;
-        }
-        .point-item {
-            display: flex;
-            align-items: flex-start;
-            gap: 20px;
-        }
-        .point-bullet {
-            width: 10px;
-            height: 10px;
-            background: #fe2c55;
-            border-radius: 50%;
-            margin-top: 16px;
-            flex-shrink: 0;
-        }
-        .point-text {
-            font-size: 32px;
-            line-height: 1.6;
+        .content-body {
+            font-size: 30px;
+            line-height: 1.8;
             color: #ccc;
         }
-        .point-text strong {
+        .content-body p {
+            margin-bottom: 16px;
+        }
+        .content-body strong {
             color: #fe2c55;
             font-weight: 600;
         }
-
-        /* 强调卡片 */
-        .highlight-card {
-            background: #fe2c55;
-            justify-content: center;
-            align-items: center;
-            text-align: center;
-        }
-        .highlight-text {
-            font-size: 52px;
-            font-weight: 900;
-            color: #fff;
-            line-height: 1.4;
-        }
-        .highlight-sub {
-            font-size: 28px;
-            color: rgba(255,255,255,0.7);
-            margin-top: 30px;
+        .content-body code {
+            background: #2a2a2a;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 26px;
+            color: #fe2c55;
         }
 
         /* 金句卡片 */
@@ -209,9 +167,10 @@ DOUYIN_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _smart_parse_news(content: str) -> Tuple[str, str, List[Tuple[str, List[str]]], str]:
+def _parse_content(content: str) -> Tuple[str, str, List[str], str]:
     """
-    解析热点新闻内容，返回 (标签, 标题, [(小节标题, 要点列表), ...], 金句)
+    解析抖音文案，返回 (标签, 标题, 段落列表, 金句)
+    保留全部内容，不截断
     """
     lines = content.strip().split("\n")
 
@@ -235,94 +194,52 @@ def _smart_parse_news(content: str) -> Tuple[str, str, List[Tuple[str, List[str]
             title_idx = i
             break
 
-    # 3. 解析段落
-    sections = []
-    current_title = ""
-    current_points = []
+    # 3. 提取所有段落（保留顺序，不截断）
+    paragraphs = []
+    current_para = []
 
-    i = title_idx + 1
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line:
-            i += 1
+    for line in lines[title_idx + 1:]:
+        stripped = line.strip()
+
+        # 跳过纯空行
+        if not stripped:
+            if current_para:
+                paragraphs.append("\n".join(current_para))
+                current_para = []
             continue
 
-        # 检测小节标题（严格：必须是 "数字. 文字" 格式，不能是列表项）
-        is_header = False
-        header_text = ""
+        current_para.append(stripped)
 
-        # 跳过列表项（以 - * • 开头）
-        if line.startswith('-') or line.startswith('*') or line.startswith('•'):
-            pass  # 不是标题，是列表项
-
-        # 纯数字序号 + 文字，如 "1. 核心升级"
-        elif (m := re.match(r'^(\d+)[\.\、\.]\s*(.+)', line)):
-            is_header = True
-            header_text = m.group(2).strip()
-
-        # emoji 开头的短句
-        elif re.match(r'^[\U0001F300-\U0001F9FF]\s*\S', line) and len(line) < 50:
-            is_header = True
-            header_text = re.sub(r'^[\U0001F300-\U0001F9FF]\s*', '', line).strip()
-
-        # 纯文字短句，下一行是列表
-        elif len(line) < 25 and i + 1 < len(lines) and re.match(r'^[-*•·]', lines[i + 1]):
-            is_header = True
-            header_text = line
-
-        if is_header:
-            if current_title and current_points:
-                sections.append((current_title, current_points))
-            current_title = header_text
-            current_points = []
-        else:
-            clean = re.sub(r'^[-*•·\u2705\u274c]?\s*', '', line)
-            clean = re.sub(r'^\d+[\.\、\.]\s*', '', clean).strip()
-            if clean and len(clean) > 3:
-                if len(clean) > 100:
-                    clean = clean[:98] + "..."
-                if current_title:
-                    current_points.append(clean)
-
-        i += 1
-
-    if current_title and current_points:
-        sections.append((current_title, current_points))
-
-    # 限制最多 3 个 section
-    if len(sections) > 3:
-        merged = []
-        for sec_title, sec_points in sections[2:]:
-            merged.extend(sec_points)
-        sections = sections[:2] + [("更多看点", merged)]
-
-    # 兜底
-    if not sections:
-        all_points = []
-        for line in lines[title_idx + 1:]:
-            clean = re.sub(r'^[-*•·\u2705\u274c]\s*', '', line.strip()).strip()
-            if clean and len(clean) > 5 and len(clean) < 100:
-                all_points.append(clean)
-        if all_points:
-            sections = [("核心看点", all_points)]
+    # 保存最后一个段落
+    if current_para:
+        paragraphs.append("\n".join(current_para))
 
     # 4. 提取金句
-    quote = "科技改变生活，关注前沿动态。"
-    candidates = []
-    for line in lines:
-        clean = line.strip()
-        clean = re.sub(r'^[-*•·\u2705\u274c]\s*', '', clean)
-        if 15 <= len(clean) <= 60:
-            if any(w in clean for w in ["本质", "核心", "关键", "意味着", "标志着", "未来"]):
-                candidates.append(clean)
-    if candidates:
-        quote = max(candidates, key=len)
+    quote = ""
+    for para in paragraphs:
+        sentences = re.split(r'[。！?？]', para)
+        for sent in sentences:
+            sent = sent.strip()
+            if 15 <= len(sent) <= 80:
+                if any(w in sent for w in ["本质", "核心", "关键", "意味着", "标志着", "未来"]):
+                    quote = sent
+                    break
+        if quote:
+            break
 
-    return tag, title, sections, quote
+    if not quote and paragraphs:
+        for para in reversed(paragraphs):
+            if len(para) > 15 and len(para) < 80:
+                quote = para
+                break
+
+    if not quote:
+        quote = "科技改变生活，关注前沿动态。"
+
+    return tag, title, paragraphs, quote
 
 
 def _build_cover_card(tag: str, title: str) -> str:
-    # 给标题里的关键词加红色
     title_colored = title
     for kw in ["AI", "GPT", "ChatGPT", "大模型", "科技", "突破", "发布", "开源"]:
         if kw in title and f'<span>{kw}</span>' not in title_colored:
@@ -338,66 +255,31 @@ def _build_cover_card(tag: str, title: str) -> str:
     </div>"""
 
 
-def _build_point_card(index: int, title: str, points: List[str]) -> str:
-    display_points = points[:4]
-    items_html = "\n".join(
-        f'<div class="point-item"><div class="point-bullet"></div><div class="point-text">{p}</div></div>'
-        for p in display_points
-    )
+def _build_content_card(title: str, paragraphs: List[str]) -> str:
+    """构建内容卡片，显示连续的段落"""
+    para_html = []
+    for para in paragraphs:
+        # 处理加粗
+        para = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', para)
+        # 处理代码
+        para = re.sub(r'`([^`]+)`', r'<code>\1</code>', para)
+        # 处理换行
+        para = para.replace("\n", "<br>")
+        para_html.append(f'<p>{para}</p>')
+
+    body_html = "\n".join(para_html)
+
     return f"""
-    <div class="card point-card">
-        <div class="point-card-header">
-            <div class="point-num">{index}</div>
-            <div class="point-title">{title}</div>
+    <div class="card content-card">
+        <h2>{title}</h2>
+        <div class="content-body">
+            {body_html}
         </div>
-        <div class="point-items">
-            {items_html}
-        </div>
-    </div>"""
-
-
-def _build_content_card(points: List[str]) -> str:
-    """合并所有内容到一张大卡片"""
-    items_html = "\n".join(
-        f'<div class="point-item"><div class="point-bullet"></div><div class="point-text">{p}</div></div>'
-        for p in points
-    )
-    return f"""
-    <div class="card point-card">
-        <div class="point-card-header">
-            <div class="point-num">★</div>
-            <div class="point-title">核心看点</div>
-        </div>
-        <div class="point-items">
-            {items_html}
-        </div>
-    </div>"""
-
-
-def _build_end_card(quote: str) -> str:
-    """金句 + 互动 合并到最后一张"""
-    return f"""
-    <div class="card quote-card">
-        <div class="quote-mark">"</div>
-        <div class="quote-text">{quote}</div>
-        <div style="margin-top: 80px;">
-            <div class="cta-title" style="font-size: 36px;">关注获取更多科技资讯</div>
-            <div class="cta-text" style="font-size: 24px; margin: 20px 0 30px;">每天3分钟 · 了解AI与科技行业最新动态</div>
-            <div class="cta-btn" style="padding: 16px 40px; font-size: 24px;">点赞 + 关注 ↓</div>
-        </div>
-    </div>"""
-
-
-def _build_highlight_card(text: str, sub: str = "") -> str:
-    sub_html = f'<div class="highlight-sub">{sub}</div>' if sub else ""
-    return f"""
-    <div class="card highlight-card">
-        <div class="highlight-text">{text}</div>
-        {sub_html}
     </div>"""
 
 
 def _build_quote_card(quote: str) -> str:
+    quote = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', quote)
     return f"""
     <div class="card quote-card">
         <div class="quote-mark">"</div>
@@ -421,26 +303,43 @@ class DouyinRenderer:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        tag, title, sections, quote = _smart_parse_news(content)
+        tag, title, paragraphs, quote = _parse_content(content)
 
         cards = []
 
         # 1. 封面
         cards.append(_build_cover_card(tag, title))
 
-        # 2. 内容卡片：合并所有 section 到一张大卡片
-        all_points = []
-        for sec_title, sec_points in sections:
-            # 小节标题作为加粗要点
-            all_points.append(f"<strong>{sec_title}</strong>")
-            for p in sec_points[:3]:  # 每节最多3条
-                all_points.append(p)
-        
-        if all_points:
-            cards.append(_build_content_card(all_points))
+        # 2. 内容卡片：按顺序分配段落到卡片
+        # 每张卡片大约容纳 800-1000 字
+        CARD_MAX_CHARS = 900
+        current_card_paras = []
+        current_card_chars = 0
+        card_index = 1
 
-        # 3. 金句 + 互动 合并到最后一张
-        cards.append(_build_end_card(quote))
+        for para in paragraphs:
+            para_chars = len(para)
+
+            # 如果当前卡片已满，保存并开始新卡片
+            if current_card_chars + para_chars > CARD_MAX_CHARS and current_card_paras:
+                cards.append(_build_content_card(f"Part {card_index}", current_card_paras))
+                current_card_paras = [para]
+                current_card_chars = para_chars
+                card_index += 1
+            else:
+                current_card_paras.append(para)
+                current_card_chars += para_chars
+
+        # 保存最后一个内容卡片
+        if current_card_paras:
+            cards.append(_build_content_card(f"Part {card_index}", current_card_paras))
+
+        # 3. 金句卡片
+        if quote:
+            cards.append(_build_quote_card(quote))
+
+        # 4. 互动卡片
+        cards.append(_build_cta_card())
 
         html = DOUYIN_TEMPLATE.replace("{CARDS}", "\n".join(cards))
 
