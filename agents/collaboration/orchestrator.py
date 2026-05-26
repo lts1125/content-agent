@@ -12,6 +12,9 @@ from pydantic_ai import Agent
 
 from agents.collaboration.context import AgentContext, AgentMessage
 from agents.schemas import WriterOutput, EditVerdict, StyleProfile
+from agents.writer_agent import WriterAgent
+from agents.editor_agent import EditorAgent
+from agents.researcher_agent import ResearcherAgent
 from agents.writer_agent import _ModelConfig
 
 
@@ -21,6 +24,13 @@ class Orchestrator:
     def __init__(self):
         self.model, _ = _ModelConfig.from_env()
         self.agents = {}
+        self._init_default_agents()
+
+    def _init_default_agents(self):
+        """初始化默认 Agent"""
+        self.register_agent("Researcher", ResearcherAgent())
+        self.register_agent("Writer", WriterAgent())
+        self.register_agent("Editor", EditorAgent(self.model))
 
     def register_agent(self, name: str, agent):
         """注册 Agent"""

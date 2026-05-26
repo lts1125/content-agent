@@ -328,12 +328,18 @@ class WriterAgent:
         platforms: List[str],
         style: str = "default",
         concurrent: bool = False,
+        feedback: str = "",
     ) -> WriterOutput:
         """生成初稿
 
         Args:
             concurrent: 是否按平台并发生成。默认 False（单次调用生成三平台）。
+            feedback: Editor 的反馈，用于修改
         """
+        if feedback:
+            # 有反馈，使用 refine 模式
+            return self._run_with_feedback(raw_notes, platforms, feedback)
+
         if not concurrent or len(platforms) <= 1:
             # 非并发模式：保持现有行为，追加风格画像
             prompt = self._build_draft_prompt(raw_notes, platforms)
@@ -470,3 +476,20 @@ class WriterAgent:
             revision_notes=f"【{weakest} 精修】按审稿意见修改。{refined.revision_notes}",
         )
         return output
+
+    # --------------------- 带反馈生成 ---------------------
+    def _run_with_feedback(
+        self,
+        raw_notes: str,
+        platforms: List[str],
+        feedback: str,
+    ) -> WriterOutput:
+        """根据 Editor 反馈生成"""
+        prompt = (
+            f"请根据以下反馈修改内容：\n\n"
+            f"反馈：\n{feedback}\n\n"
+            f"原始笔记：\n{raw_notes[:1500]}\n\n"
+            f"请生成 {', '.join(platforms)} 平台的内容。"
+        )
+        result = self._refine_agent.run_sync(prompt)
+        return result.output
