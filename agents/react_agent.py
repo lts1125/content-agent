@@ -169,19 +169,27 @@ class ReActAgent:
         )
 
     def _evaluate_step(self, content: WriterOutput, platforms: List[str], attempt: int):
-        """执行评估步骤，返回 (step, score)"""
-        thought = f"第{attempt}次评估：检查生成内容的质量"
+        """执行评估步骤，返回 (step, score)
+        只评估生成的平台，避免空内容拉低分数
+        """
+        thought = f"第{attempt}次评估：检查 {', '.join(platforms)} 平台内容的质量"
         step = ReActStep(thought=thought)
         step.action = "evaluate(生成内容)"
 
-        # 构建评估内容
+        # 只构建生成平台的内容，不传空内容
         eval_content = {}
         for platform in platforms:
             text = getattr(content, platform, "")
             if text:
                 eval_content[platform] = text
 
-        result = execute_tool("evaluate", **eval_content)
+        # 如果只有一个平台，直接评估该平台
+        if len(eval_content) == 1:
+            platform, text = list(eval_content.items())[0]
+            result = execute_tool("evaluate", **{platform: text})
+        else:
+            result = execute_tool("evaluate", **eval_content)
+
         if result.success and hasattr(result.data, 'overall'):
             score = result.data.overall
             step.observation = f"评分: {score}/100"
