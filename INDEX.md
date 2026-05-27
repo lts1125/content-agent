@@ -79,12 +79,9 @@
 | 文件 | 阶段 | 内容 |
 |------|------|------|
 | `phase0_agent_implementation_design.md` | P0 | Agent 核心实现设计 |
-| `phase0_implementation_prompt.md` | P0 | P0 实现 Prompt |
 | `phase0_trend_scheduler_design.md` | P0 | TrendScheduler 设计 |
 | `phase1_agent_intelligence_design.md` | P1 | Agent 智能增强设计 |
-| `phase1_implementation_prompt.md` | P1 | P1 实现 Prompt |
 | `phase2_auto_publish_design.md` | P2 | 自动发布设计 |
-| `phase2_implementation_prompt.md` | P2 | P2 实现 Prompt |
 | `phase4_autonomous_planning_design.md` | P4 | 自主规划设计 |
 | `phase4_autonomous_refactor_design.md` | P4 | 自主架构重构设计 |
 | `phase4_multi_agent_collaboration_design.md` | P4 | 多 Agent 协作设计 |
