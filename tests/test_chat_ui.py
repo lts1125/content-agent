@@ -48,6 +48,32 @@ class ChatIntentTest(unittest.TestCase):
         self.assertEqual(["gongzhonghao"], intent["platforms"])
         self.assertFalse(intent["has_source_material"])
         self.assertIn("介绍 AI Agent", intent["topic"])
+        self.assertNotIn("公众号文章", intent["topic"])
+
+    def test_extracts_writing_requirements_from_user_request(self):
+        intent = chat_ui.ChatAgent()._analyze_intent(
+            "帮我写一篇给小白介绍 AI Agent 的公众号文章，讲得通俗易懂一点，像程序员给朋友解释，少用术语，不要太营销"
+        )
+
+        self.assertEqual("小白", intent["writing_requirements"]["audience"])
+        self.assertIn("通俗易懂", intent["writing_requirements"]["tone"])
+        self.assertIn("程序员给朋友解释", intent["writing_requirements"]["style_reference"])
+        self.assertIn("少用术语", intent["writing_requirements"]["avoid"])
+        self.assertIn("不要太营销", intent["writing_requirements"]["avoid"])
+        self.assertNotIn("公众号文章", intent["topic"])
+
+    def test_generation_notes_include_writing_requirements(self):
+        agent = chat_ui.ChatAgent()
+        intent = agent._analyze_intent(
+            "帮我写一篇给小白介绍 AI Agent 的公众号文章，讲得通俗易懂一点，像程序员给朋友解释"
+        )
+
+        raw_notes = chat_ui._build_generation_notes("AI Agent 入门", "", intent)
+
+        self.assertIn("## 写作要求", raw_notes)
+        self.assertIn("目标读者：小白", raw_notes)
+        self.assertIn("表达语气：通俗易懂", raw_notes)
+        self.assertIn("风格参考：程序员给朋友解释", raw_notes)
 
 
 if __name__ == "__main__":

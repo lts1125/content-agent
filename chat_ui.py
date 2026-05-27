@@ -128,6 +128,114 @@ def _extract_topic_or_source(message: str) -> tuple:
 
     return topic or original, False
 
+
+def _extract_writing_requirements(message: str) -> dict:
+    """提取用户自然语言里的写作要求，用于稳定控制生成风格。"""
+    requirements = {
+        "audience": "",
+        "tone": "",
+        "style_reference": "",
+        "avoid": [],
+    }
+
+    audience_match = re.search(r"给(.{1,12}?)(介绍|讲|写|科普)", message)
+    if not audience_match:
+        audience_match = re.search(r"面向(.{1,12}?)(读者|用户|人群|，|,|。|$)", message)
+    if audience_match:
+        requirements["audience"] = audience_match.group(1).strip(" 的，,。")
+
+    tone_keywords = [
+        "通俗易懂",
+        "大白话",
+        "口语化",
+        "专业一点",
+        "专业严谨",
+        "轻松一点",
+        "有故事感",
+        "犀利一点",
+        "克制一点",
+        "接地气",
+    ]
+    matched_tones = [kw for kw in tone_keywords if kw in message]
+    if matched_tones:
+        requirements["tone"] = "、".join(matched_tones)
+
+    style_match = re.search(r"像(.{2,30}?)(一样|那样|的风格|风格|类似|，|,|。|$)", message)
+    if style_match:
+        requirements["style_reference"] = style_match.group(1).strip(" ，,。")
+
+    avoid_patterns = [
+        r"少用[^，,。；;]{1,12}",
+        r"不要[^，,。；;]{1,16}",
+        r"别[^，,。；;]{1,16}",
+        r"避免[^，,。；;]{1,16}",
+    ]
+    avoid_items = []
+    for pattern in avoid_patterns:
+        for match in re.findall(pattern, message):
+            item = match.strip(" ，,。")
+            if item and item not in avoid_items:
+                avoid_items.append(item)
+    requirements["avoid"] = avoid_items
+
+    return requirements
+
+
+def _strip_writing_requirements_from_topic(topic: str) -> str:
+    """从短主题中移除附加风格指令，避免主题变得啰嗦。"""
+    cleaned = topic
+    split_patterns = [
+        r"[，,。]\s*讲得.*$",
+        r"[，,。]\s*讲的.*$",
+        r"[，,。]\s*用.*风格.*$",
+        r"[，,。]\s*像.*$",
+        r"[，,。]\s*少用.*$",
+        r"[，,。]\s*不要.*$",
+        r"[，,。]\s*别.*$",
+        r"[，,。]\s*避免.*$",
+    ]
+    for pattern in split_patterns:
+        cleaned = re.sub(pattern, "", cleaned)
+    cleaned = re.sub(r"\s*(的)?\s*(微信)?公众号(文章|长文|推文)?\s*$", "", cleaned)
+    cleaned = re.sub(r"\s*小红书(笔记|文案|帖子)?\s*$", "", cleaned)
+    cleaned = re.sub(r"\s*抖音(文案|脚本|口播|视频文案)?\s*$", "", cleaned)
+    return cleaned.strip(" ，,。") or topic
+
+
+def _format_writing_requirements(requirements: dict) -> str:
+    lines = []
+    if requirements.get("audience"):
+        lines.append(f"- 目标读者：{requirements['audience']}")
+    if requirements.get("tone"):
+        lines.append(f"- 表达语气：{requirements['tone']}")
+    if requirements.get("style_reference"):
+        lines.append(
+            "- 风格参考："
+            f"{requirements['style_reference']}（提炼其抽象表达特征，不直接仿写具体个人措辞）"
+        )
+    if requirements.get("avoid"):
+        lines.append(f"- 避免事项：{'；'.join(requirements['avoid'])}")
+    if not lines:
+        return ""
+    return "## 写作要求\n\n" + "\n".join(lines)
+
+
+def _build_generation_notes(topic: str, research_report: str, intent: dict) -> str:
+    requirements_text = _format_writing_requirements(intent.get("writing_requirements", {}))
+
+    if intent.get("has_source_material"):
+        parts = [topic]
+    else:
+        parts = [f"# {topic}"]
+        if research_report:
+            parts.extend(["## 搜索资料", research_report])
+        parts.extend(["## 主题", topic])
+
+    if requirements_text:
+        parts.append(requirements_text)
+
+    return "\n\n".join(part for part in parts if part)
+
 class ChatAgent:
     """聊天 Agent，处理用户消息并执行内容生成"""
     
@@ -178,12 +286,16 @@ class ChatAgent:
         if is_generate:
             platforms = _detect_requested_platforms(message)
             topic, has_source_material = _extract_topic_or_source(message)
+            writing_requirements = _extract_writing_requirements(message)
+            if not has_source_material:
+                topic = _strip_writing_requirements_from_topic(topic)
             
             return {
                 "type": "generate",
                 "platforms": platforms,
                 "topic": topic,
                 "has_source_material": has_source_material,
+                "writing_requirements": writing_requirements,
             }
         
         # 检查是否是帮助请求
@@ -209,11 +321,11 @@ class ChatAgent:
         try:
             # 1. 构建笔记。用户贴了完整素材时，优先忠实使用素材，避免搜索结果覆盖主题。
             if has_source_material:
-                raw_notes = topic
+                raw_notes = _build_generation_notes(topic, "", intent)
             else:
                 search_result = execute_tool("search", query=topic[:200])
                 research_report = search_result.data if search_result.success else ""
-                raw_notes = f"# {topic}\n\n## 搜索资料\n\n{research_report}\n\n## 主题\n\n{topic}"
+                raw_notes = _build_generation_notes(topic, research_report, intent)
             
             # 2. 选择策略
             strategy = self.selector.select(raw_notes)
