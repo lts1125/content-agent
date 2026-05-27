@@ -6,6 +6,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from pydantic_ai import Agent
@@ -49,19 +50,16 @@ class SearchTool(BaseTool):
     def execute(self, query: str) -> ToolResult:
         """执行搜索"""
         try:
-            # 直接使用项目内的 web_search 工具
-            import sys
-            sys.path.insert(0, '/Users/lee/content-agent')
-            from web_search import web_search
+            # 使用项目内的搜索模块
+            from content_agent.research import duckduckgo_search
             
-            result = web_search(query, limit=3)
-            items = result.get("data", {}).get("web", [])
+            items = duckduckgo_search(query, max_results=3)
             
             summaries = []
             for item in items:
                 title = item.get("title", "")
-                desc = item.get("description", "")
-                url = item.get("url", "")
+                desc = item.get("body", "")
+                url = item.get("href", "")
                 summaries.append(f"[{title}] {desc}\nURL: {url}")
             
             return ToolResult(
@@ -145,19 +143,22 @@ class FileReadTool(BaseTool):
     def execute(self, path: str) -> ToolResult:
         """执行文件读取"""
         try:
-            # 安全检查：限制文件路径
-            allowed_prefixes = [
-                "/Users/lee/content-agent/",
-                "/Users/lee/notes/",
-                "/Users/lee/wechat_doc/",
+            # 安全检查：限制文件路径在项目目录下
+            project_root = Path(__file__).resolve().parent.parent
+            resolved_path = Path(path).expanduser().resolve()
+            
+            # 检查是否在项目目录或用户笔记目录下
+            allowed_roots = [
+                project_root,
+                Path.home() / "notes",
+                Path.home() / "wechat_doc",
             ]
             
-            # 转换为绝对路径
-            import os
-            abs_path = os.path.abspath(path)
-            
             # 检查是否在允许的路径下
-            allowed = any(abs_path.startswith(prefix) for prefix in allowed_prefixes)
+            allowed = any(
+                resolved_path == root or resolved_path.is_relative_to(root)
+                for root in allowed_roots
+            )
             if not allowed:
                 return ToolResult(
                     success=False,
@@ -166,7 +167,7 @@ class FileReadTool(BaseTool):
                 )
             
             # 读取文件
-            with open(abs_path, 'r', encoding='utf-8') as f:
+            with open(resolved_path, 'r', encoding='utf-8') as f:
                 content = f.read()
             
             # 截断过长的内容
@@ -273,18 +274,16 @@ class RAGTool(BaseTool):
     def execute(self, query: str, top_k: int = 3) -> ToolResult:
         """执行检索"""
         try:
-            # 直接使用项目内的 RAGPipeline
-            import sys
-            sys.path.insert(0, '/Users/lee/content-agent')
-            from content_agent.rag_pipeline import RAGPipeline
+            # 使用项目内 RAG 模块的 VaultIndexer
+            from content_agent.rag.indexer import VaultIndexer
             
-            rag = RAGPipeline()
-            results = rag.search(query, top_k=top_k)
+            indexer = VaultIndexer()
+            results = indexer.search(query, n_results=top_k)
             
             summaries = []
             for r in results:
-                title = r.get("title", "")
-                content = r.get("content", "")[:200]
+                title = r.get("metadata", {}).get("title", "")
+                content = r.get("document", "")[:200]
                 summaries.append(f"[{title}] {content}...")
             
             return ToolResult(

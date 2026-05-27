@@ -13,6 +13,18 @@ from agents.schemas import WriterOutput
 from agents.tools import execute_tool
 
 
+def _extract_topic(raw_notes: str) -> str:
+    """从笔记中提取适合搜索的主题。"""
+    for line in raw_notes.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            return line.lstrip("#").strip()
+        return line[:100]
+    return raw_notes[:100]
+
+
 class AutonomousPlanner:
     """自主规划器"""
 
@@ -36,7 +48,7 @@ class AutonomousPlanner:
         print(f"   工具: {', '.join(strategy.tools)}")
 
         context = AgentContext(
-            topic=raw_notes[:100],
+            topic=_extract_topic(raw_notes),
             raw_notes=raw_notes,
         )
 
@@ -84,7 +96,8 @@ class AutonomousPlanner:
     def _execute_search(self, context: AgentContext, topic: str) -> dict:
         """执行搜索"""
         print("   🔍 搜索相关资料...")
-        result = execute_tool("search", query=topic[:200])
+        query = context.topic or _extract_topic(topic)
+        result = execute_tool("search", query=query[:200])
         if result.success:
             context.research_report = result.data
             print(f"   ✅ 搜索完成 ({len(result.data)} 字)")
@@ -130,7 +143,10 @@ class AutonomousPlanner:
     def _execute_generate(self, context: AgentContext, raw_notes: str, platforms: List[str]) -> dict:
         """执行内容生成"""
         print("   ✍️ 生成内容...")
-        result = execute_tool("generate", raw_notes=context.research_report or raw_notes, platforms=platforms)
+        generation_notes = raw_notes
+        if context.research_report:
+            generation_notes = f"{raw_notes}\n\n## 补充研究资料\n\n{context.research_report}"
+        result = execute_tool("generate", raw_notes=generation_notes, platforms=platforms)
         if result.success and isinstance(result.data, WriterOutput):
             context.draft_content = result.data
             print("   ✅ 内容生成完成")

@@ -8,6 +8,7 @@ RAG 效果测试脚本
 
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, '.')
 
@@ -143,7 +144,7 @@ def main():
 
     if count == 0:
         print("\nVault 未索引，开始索引...")
-        vault_path = os.getenv("VAULT_PATH", "/Users/lee/content-agent/notes")
+        vault_path = os.getenv("VAULT_PATH", str(Path(__file__).resolve().parent / "notes"))
         indexer.index_vault(vault_path, clear_existing=True)
         print(f"索引完成: {indexer.store.count()} 条")
 

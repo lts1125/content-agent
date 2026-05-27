@@ -43,7 +43,7 @@ class RegressionTester:
     """回归测试器"""
 
     def __init__(self, vault_path: Optional[str] = None):
-        self.vault_path = Path(vault_path or os.getenv("VAULT_PATH", "/Users/lee/content-agent/notes"))
+        self.vault_path = Path(vault_path or os.getenv("VAULT_PATH", str(Path(__file__).resolve().parent.parent.parent / "notes")))
         self.evaluator = ContentEvaluator()
         self.orchestrator = Orchestrator()
 

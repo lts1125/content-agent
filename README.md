@@ -47,7 +47,21 @@ cp .env.example .env
 # 编辑 .env，填入你的 API Key
 ```
 
-### 3. 运行
+### 3. 配置公众号发布（可选）
+
+如需使用公众号草稿箱发布功能，需安装 kuaifa CLI：
+
+```bash
+# 安装 kuaifa（需 Node.js 环境）
+npm install -g kuaifa
+
+# 配置 kuaifa（按提示输入微信公众号 AppID、AppSecret、API Key）
+kuaifa config
+```
+
+安装完成后，在 Web UI 的「配置」Tab 中验证 kuaifa 状态。
+
+### 4. 运行
 
 ```bash
 # 默认演示
@@ -78,7 +92,7 @@ python main.py --react --note-file ~/notes/mcp.md --platforms gongzhonghao,xiaoh
 | 三平台内容生成 | ✅ |
 | 小红书/抖音配图 | ✅ |
 | 热点监控 & 自动选题 | ✅ |
-| 公众号自动发布 | ✅ |
+| 公众号自动发布 | ✅（需安装 kuaifa CLI）|
 | ReAct Agent | ✅ |
 | 智能排期 | ✅ |
 | 数据回流 & 风格画像 | ✅ |

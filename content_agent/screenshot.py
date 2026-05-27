@@ -62,7 +62,8 @@ def html_to_png(
 def demo():
     """测试截图"""
     # 找一个现有的 HTML 文件测试
-    test_html = "/Users/lee/content-agent/output/douyin_demo/douyin_cards.html"
+    project_root = Path(__file__).resolve().parent.parent
+    test_html = str(project_root / "output" / "douyin_demo" / "douyin_cards.html")
     if os.path.exists(test_html):
         result = html_to_png(test_html, width=1080, height=1920)
         print(f"截图完成: {result}")
