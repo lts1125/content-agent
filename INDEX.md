@@ -85,7 +85,6 @@
 | `phase4_autonomous_planning_design.md` | P4 | 自主规划设计 |
 | `phase4_autonomous_refactor_design.md` | P4 | 自主架构重构设计 |
 | `phase4_multi_agent_collaboration_design.md` | P4 | 多 Agent 协作设计 |
-| `phase4_react_cli_usage.md` | P4 | ReAct CLI 使用文档 |
 | `phase4_react_refactor_design.md` | P4 | ReAct 重构设计 |
 | `phase4_web_ui_orchestrator_integration.md` | P4 | Web UI + Orchestrator 集成 |
 | `phase5_architecture_decisions.md` | 架构 | 架构决策记录 |
@@ -93,12 +92,7 @@
 | `phase5_b1_self_trigger_design.md` | 架构 | B1 自触发设计 |
 | `phase5_cli_usage.md` | 架构 | CLI 使用文档 |
 | `phase5_enhanced_tools_design.md` | 架构 | 增强工具设计 |
-| `phase5_eval_phase2_design.md` | 架构 | 评估系统 Phase2 |
-| `phase5_eval_phase3_design.md` | 架构 | 评估系统 Phase3 |
-| `phase5_eval_system_design.md` | 架构 | 评估系统设计 |
-| `phase5_feedback_agent_design.md` | 架构 | Feedback Agent 设计 |
-| `phase5_feedback_decision_logic.md` | 架构 | 反馈决策逻辑 |
+| `phase5_eval_and_rag_design.md` | 架构 | Eval + RAG 质量体系 |
+| `phase5_feedback_loop_design.md` | 架构 | Feedback Loop 与风格画像 |
 | `phase5_flow.md` | 架构 | 业务流程图 |
-| `phase5_rag_eval_proposal.md` | 架构 | RAG 评估方案 |
 | `phase5_smart_schedule_design.md` | 架构 | 智能排期设计 |
-| `phase5_style_profile_integration.md` | 架构 | 风格配置集成 |

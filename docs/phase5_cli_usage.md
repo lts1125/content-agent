@@ -19,6 +19,8 @@ python main.py -i notes/my_note.md -p xiaohongshu -o ./dist
 
 ## ReAct Agent 模式
 
+ReAct 模式会让 Agent 按 “思考 -> 行动 -> 观察” 的流程调用工具，例如搜索、生成、评估和修改。
+
 ### 指定笔记文件生成
 ```bash
 python main.py --react --note-file ~/notes/mcp.md --platforms gongzhonghao,xiaohongshu
@@ -37,6 +39,18 @@ python main.py --react --vault-note "note_filename.md" --platforms gongzhonghao,
 ### 生成后自动发布公众号
 ```bash
 python main.py --react --note-file ~/notes/mcp.md --platforms gongzhonghao --publish --cover ~/images/cover.png
+```
+
+### 完整示例
+```bash
+# 生成公众号文章并自动发布
+python main.py --react --note-file ~/notes/mcp.md --platforms gongzhonghao --publish
+
+# 生成三平台内容，不自动发布
+python main.py --react --vault-note "ai_agent_intro.md" --platforms gongzhonghao,xiaohongshu,douyin
+
+# 快速测试
+python main.py --react --note-content "# 测试\n这是一个测试笔记" --platforms gongzhonghao
 ```
 
 ## 发布命令
