@@ -98,6 +98,43 @@ platform: {platform}
     return str(filename)
 
 
+PLATFORM_MAP = {
+    "公众号": "gongzhonghao",
+    "微信": "gongzhonghao",
+    "小红书": "xiaohongshu",
+    "抖音": "douyin",
+}
+
+VALID_PLATFORMS = {"xiaohongshu", "gongzhonghao", "douyin"}
+
+
+def parse_platforms(platforms_arg: str = None, platform_arg: str = None) -> list[str]:
+    """解析 CLI 平台参数，返回规范化平台名列表。"""
+    raw = platform_arg if platform_arg and (not platforms_arg or platforms_arg == "all") else platforms_arg
+    raw = (raw or "all").strip()
+
+    platforms = []
+    for item in raw.split(","):
+        p = item.strip()
+        if not p:
+            continue
+        mapped = PLATFORM_MAP.get(p, p)
+        if mapped == "all":
+            platforms.extend(["xiaohongshu", "gongzhonghao", "douyin"])
+        else:
+            platforms.append(mapped)
+
+    invalid = set(platforms) - VALID_PLATFORMS
+    if invalid:
+        raise ValueError(f"无效平台: {', '.join(sorted(invalid))}")
+
+    deduped = []
+    for platform in platforms:
+        if platform not in deduped:
+            deduped.append(platform)
+    return deduped
+
+
 def _get_date_subdir(base_dir: Path) -> Path:
     """生成日期子目录，格式: output/YYYYMMDD/"""
     today = datetime.datetime.now().strftime("%Y%m%d")
@@ -871,17 +908,13 @@ def _run_react_mode(args):
         print("❌ 请提供笔记内容（--note-file / --note-content / --vault-note / --topic）")
         sys.exit(1)
 
-    # 解析平台
-    PLATFORM_MAP = {
-        "公众号": "gongzhonghao",
-        "微信": "gongzhonghao",
-        "小红书": "xiaohongshu",
-        "抖音": "douyin",
-    }
-    platforms = []
-    for p in (args.platforms or "gongzhonghao").split(","):
-        p = p.strip()
-        platforms.append(PLATFORM_MAP.get(p, p))
+    # 解析平台。兼容 --platform，避免默认 all 被当成真实平台字段。
+    try:
+        platforms = parse_platforms(args.platforms, args.platform)
+    except ValueError as e:
+        print(f"❌ 错误: {e}")
+        print(f"   有效选项: {', '.join(sorted(VALID_PLATFORMS))}, all")
+        sys.exit(1)
     print(f"🎯 目标平台: {', '.join(platforms)}")
 
     # 运行 Agent
@@ -955,7 +988,7 @@ def _run_react_mode(args):
         # 使用旧架构（ReAct Agent）
         print("\n🚀 启动 ReAct Agent...")
         agent = ReActAgent(max_steps=3)
-        react_result = agent.run(raw_notes, platforms)
+        react_result = agent.run(raw_notes, platforms, allow_search=bool(args.topic))
 
         print(f"\n✅ 生成完成！")
         print(f"步骤数: {len(react_result.steps)}")
@@ -1207,17 +1240,12 @@ def main():
     print(f"📁 共发现 {len(note_files)} 个笔记文件" if is_batch else "📄 单文件模式")
 
     # 2. 解析平台选项
-    platform_arg = args.platforms.lower().strip()
-    if platform_arg == "all":
-        enabled_platforms = {"xiaohongshu", "gongzhonghao", "douyin"}
-    else:
-        enabled_platforms = {p.strip() for p in platform_arg.split(",")}
-        valid = {"xiaohongshu", "gongzhonghao", "douyin"}
-        invalid = enabled_platforms - valid
-        if invalid:
-            print(f"❌ 错误: 无效平台: {', '.join(invalid)}")
-            print(f"   有效选项: {', '.join(valid)}")
-            sys.exit(1)
+    try:
+        enabled_platforms = set(parse_platforms(args.platforms))
+    except ValueError as e:
+        print(f"❌ 错误: {e}")
+        print(f"   有效选项: {', '.join(sorted(VALID_PLATFORMS))}, all")
+        sys.exit(1)
 
     # 3. 初始化共享的 Agent 和 Checker
     try:

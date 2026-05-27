@@ -67,13 +67,14 @@ class ReActAgent:
             system_prompt=REACT_SYSTEM_PROMPT.format(tools=self.tools_prompt),
         )
 
-    def run(self, raw_notes: str, platforms: List[str]) -> ReActOutput:
+    def run(self, raw_notes: str, platforms: List[str], allow_search: bool = True) -> ReActOutput:
         """
         执行完整的 ReAct 循环（含评估-修改）
 
         Args:
             raw_notes: 原始笔记内容
             platforms: 目标平台列表
+            allow_search: 是否允许 ReAct 在生成前自主搜索。已有笔记输入时通常应关闭。
 
         Returns:
             ReActOutput: 包含生成内容、执行步骤、最终评分
@@ -82,28 +83,41 @@ class ReActAgent:
         context = f"目标：根据以下笔记生成 {', '.join(platforms)} 平台的内容\n\n笔记内容：\n{raw_notes[:1500]}"
 
         # ========== Phase 1: 分析 + 搜索（可选）==========
-        thought1 = self._think(context)
-        step1 = ReActStep(thought=thought1)
+        if allow_search:
+            print("   🧠 ReAct Step 1/3: 分析任务，判断是否需要搜索...", flush=True)
+            thought1 = self._think(context)
+            step1 = ReActStep(thought=thought1)
 
-        action_name, action_params = self._parse_action(thought1)
+            action_name, action_params = self._parse_action(thought1)
 
-        if action_name == "search":
-            step1.action = f"search({json.dumps(action_params, ensure_ascii=False)})"
-            result = execute_tool("search", **action_params)
-            step1.observation = result.data if result.success else f"错误: {result.error}"
-            steps.append(step1)
+            if action_name == "search":
+                step1.action = f"search({json.dumps(action_params, ensure_ascii=False)})"
+                print(f"   🔍 ReAct: 调用搜索工具 {action_params}...", flush=True)
+                result = execute_tool("search", **action_params)
+                step1.observation = result.data if result.success else f"错误: {result.error}"
+                steps.append(step1)
 
-            # 更新上下文
-            context += f"\n\n搜索结果：\n{step1.observation[:500]}"
-            search_done = True
+                # 更新上下文
+                context += f"\n\n搜索结果：\n{step1.observation[:500]}"
+                search_done = True
+            else:
+                step1.action = "直接生成（无需搜索）"
+                step1.observation = "笔记内容充足"
+                steps.append(step1)
+                search_done = False
         else:
-            step1.action = "直接生成（无需搜索）"
-            step1.observation = "笔记内容充足"
+            step1 = ReActStep(
+                thought="用户已提供完整笔记，跳过搜索判断，直接生成。",
+                action="direct_generate",
+                observation="使用本地笔记作为唯一输入",
+            )
             steps.append(step1)
             search_done = False
 
         # ========== Phase 2: 生成内容 ==========
+        print(f"   ✍️ ReAct Step 2/3: 生成 {', '.join(platforms)} 内容...", flush=True)
         if search_done:
+            print("   🧠 ReAct: 根据搜索结果整理生成计划...", flush=True)
             thought2 = self._think(context + "\n\n基于以上信息，生成内容：")
             step2 = ReActStep(thought=thought2)
             step2.action = f"generate(platforms={platforms})"
@@ -131,6 +145,7 @@ class ReActAgent:
         # ========== Phase 3: 评估-反思-修改循环 ==========
         for attempt in range(3):  # 最多修改3次
             # 评估
+            print(f"   🔎 ReAct Step 3/3: 第 {attempt + 1} 次评估内容质量...", flush=True)
             eval_step, score = self._evaluate_step(current_content, platforms, attempt + 1)
             steps.append(eval_step)
 
@@ -145,6 +160,7 @@ class ReActAgent:
 
             # 评分未通过，反思修改
             if attempt < 2:  # 还有修改机会
+                print(f"   🔄 ReAct: 评分 {score}/100，准备反思并修改...", flush=True)
                 modify_step = self._modify_step(
                     current_content, eval_step.observation, platforms, context
                 )
@@ -153,6 +169,7 @@ class ReActAgent:
                 # 执行修改
                 if "regenerate" in modify_step.action.lower():
                     # 重新生成
+                    print("   ✍️ ReAct: 根据反馈重新生成...", flush=True)
                     result = execute_tool("generate", raw_notes=context, platforms=platforms)
                     if result.success and isinstance(result.data, WriterOutput):
                         current_content = result.data

@@ -227,32 +227,45 @@ def _parse_content(content: str) -> Tuple[str, List[str], str]:
             break
     
     # 2. 提取所有内容段落（保留顺序，不截断）
+    # 小红书文案常用 1️⃣/2️⃣/⚠️/💡/#话题 作为结构边界；如果只按空行切分，
+    # 很容易把整篇正文塞进一张卡片里。
     paragraphs = []
     current_para = []
+
+    def flush_current():
+        nonlocal current_para
+        if current_para:
+            paragraphs.append("\n".join(current_para))
+            current_para = []
+
+    def is_section_start(text: str) -> bool:
+        return bool(
+            re.match(r'^\d+[\.、]\s+', text)
+            or re.match(r'^[①②③④⑤⑥⑦⑧⑨⑩]\s*', text)
+            or re.match(r'^[0-9]?[️⃣]\s*', text)
+            or re.match(r'^[一二三四五六七八九十][、.]\s+', text)
+            or re.match(r'^第[一二三四五六七八九十0-9]+[步部分章节]\s*', text)
+            or text.startswith(("📌", "✅", "❌", "⚠️", "💡", "👉", "👇", "#"))
+        )
     
     for line in lines[title_idx + 1:]:
         stripped = line.strip()
         
         # 跳过纯空行
         if not stripped:
-            if current_para:
-                paragraphs.append("\n".join(current_para))
-                current_para = []
+            flush_current()
             continue
         
         # 处理列表项
-        if re.match(r'^[-*•·○●\u2705\u274c]\s+', stripped):
-            if current_para:
-                paragraphs.append("\n".join(current_para))
-                current_para = []
+        if re.match(r'^[-*•·○●\u2705\u274c]\s+', stripped) or is_section_start(stripped):
+            flush_current()
             # 保留列表标记
             current_para.append(stripped)
         else:
             current_para.append(stripped)
     
     # 保存最后一个段落
-    if current_para:
-        paragraphs.append("\n".join(current_para))
+    flush_current()
     
     # 3. 提取金句（从段落中找）
     quote = ""
@@ -282,6 +295,30 @@ def _parse_content(content: str) -> Tuple[str, List[str], str]:
         quote = "学习不是为了成为谁，而是为了在机会来临时，你有能力抓住它。"
     
     return title, paragraphs, quote
+
+
+def _split_long_para(para: str, max_chars: int = 360) -> List[str]:
+    """把过长段落按句子拆开，避免单张卡片内容过载。"""
+    if len(para) <= max_chars:
+        return [para]
+
+    parts = re.split(r'(?<=[。！？!?])', para)
+    chunks = []
+    current = ""
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if current and len(current) + len(part) > max_chars:
+            chunks.append(current)
+            current = part
+        else:
+            current = f"{current}{part}" if current else part
+
+    if current:
+        chunks.append(current)
+
+    return chunks or [para]
 
 
 def _build_cover_card(title: str, emoji: str, tags: List[str]) -> str:
@@ -363,17 +400,29 @@ class XiaohongshuRenderer:
         cards.append(_build_cover_card(title, emoji, tags))
 
         # 2. 内容卡片：按顺序分配段落到卡片
-        # 每张卡片大约容纳 800-1000 字
-        CARD_MAX_CHARS = 900
+        # 小红书配图更适合一张卡讲 1-2 个要点，避免一张过满、后面过空。
+        CARD_TARGET_CHARS = 280
+        CARD_MAX_CHARS = 420
+        expanded_paragraphs = []
+        for para in paragraphs:
+            expanded_paragraphs.extend(_split_long_para(para))
+
         current_card_paras = []
         current_card_chars = 0
         card_index = 1
         
-        for para in paragraphs:
+        for para in expanded_paragraphs:
             para_chars = len(para)
             
             # 如果当前卡片已满，保存并开始新卡片
-            if current_card_chars + para_chars > CARD_MAX_CHARS and current_card_paras:
+            if (
+                current_card_paras
+                and (
+                    current_card_chars + para_chars > CARD_TARGET_CHARS
+                    or current_card_chars + para_chars > CARD_MAX_CHARS
+                    or current_card_chars >= CARD_TARGET_CHARS
+                )
+            ):
                 cards.append(_build_content_card(f"Part {card_index}", current_card_paras))
                 current_card_paras = [para]
                 current_card_chars = para_chars

@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -63,6 +64,70 @@ from agents.schemas import WriterOutput
 
 # ==================== 聊天核心逻辑 ====================
 
+PLATFORM_LABELS = {
+    "gongzhonghao": "公众号",
+    "xiaohongshu": "小红书",
+    "douyin": "抖音",
+}
+
+
+def _detect_requested_platforms(message: str) -> list:
+    """优先从末尾生成指令判断平台，避免正文里的平台词误触发。"""
+    message_lower = message.lower()
+    non_empty_lines = [line.strip().lower() for line in message.splitlines() if line.strip()]
+    last_line = non_empty_lines[-1] if non_empty_lines else message_lower
+    if any(kw in last_line for kw in ["写", "生成", "创作", "改写", "整理"]):
+        instruction_text = last_line
+    else:
+        instruction_text = message_lower[-120:]
+
+    explicit_platforms = []
+    explicit_patterns = [
+        ("gongzhonghao", [r"(微信)?公众号(文章|长文|推文)?", r"wechat"]),
+        ("xiaohongshu", [r"小红书(笔记|文案|帖子)?"]),
+        ("douyin", [r"抖音(文案|脚本|口播|视频文案)?"]),
+    ]
+
+    for platform, patterns in explicit_patterns:
+        if any(re.search(pattern, instruction_text) for pattern in patterns):
+            explicit_platforms.append(platform)
+
+    if explicit_platforms:
+        return explicit_platforms
+
+    platforms = []
+    if "公众号" in message_lower or "微信" in message_lower:
+        platforms.append("gongzhonghao")
+    if "小红书" in message_lower:
+        platforms.append("xiaohongshu")
+    if "抖音" in message_lower:
+        platforms.append("douyin")
+
+    return platforms or ["gongzhonghao"]
+
+
+def _extract_topic_or_source(message: str) -> tuple:
+    """从请求中提取素材或短主题，保留正文里的原始措辞。"""
+    original = message.strip()
+    source = re.sub(
+        r"\n*\s*根据(以上|上述|这些)?内容\s*(帮我|请|麻烦)?(写|生成|创作|改写|整理).*$",
+        "",
+        original,
+        flags=re.S,
+    ).strip()
+
+    if source != original and len(source) >= 50:
+        return source, True
+
+    topic = original
+    topic = re.sub(r"^\s*(帮我|请|麻烦|想要)?\s*(写|生成|创作|来)\s*(一篇|一个)?\s*", "", topic)
+    topic = re.sub(r"\s*(的)?\s*(微信)?公众号(文章|长文|推文)?\s*$", "", topic)
+    topic = re.sub(r"\s*小红书(笔记|文案|帖子)?\s*$", "", topic)
+    topic = re.sub(r"\s*抖音(文案|脚本|口播|视频文案)?\s*$", "", topic)
+    topic = topic.strip(" ，。:：\n\t")
+
+    return topic or original, False
+
 class ChatAgent:
     """聊天 Agent，处理用户消息并执行内容生成"""
     
@@ -104,44 +169,29 @@ class ChatAgent:
     
     def _analyze_intent(self, message: str) -> dict:
         """分析用户意图"""
-        message = message.lower()
+        message_lower = message.lower()
         
         # 检查是否是生成请求
         generate_keywords = ["写", "生成", "创作", "来一篇", "帮我", "想要"]
-        is_generate = any(kw in message for kw in generate_keywords)
+        is_generate = any(kw in message_lower for kw in generate_keywords)
         
         if is_generate:
-            # 提取平台
-            platforms = []
-            if "公众号" in message or "微信" in message:
-                platforms.append("gongzhonghao")
-            if "小红书" in message:
-                platforms.append("xiaohongshu")
-            if "抖音" in message:
-                platforms.append("douyin")
-            
-            # 如果没有指定平台，默认公众号
-            if not platforms:
-                platforms = ["gongzhonghao"]
-            
-            # 提取主题（简单实现：去掉常见词后的剩余内容）
-            topic = message
-            for kw in generate_keywords:
-                topic = topic.replace(kw, "")
-            topic = topic.strip("的关于之")
+            platforms = _detect_requested_platforms(message)
+            topic, has_source_material = _extract_topic_or_source(message)
             
             return {
                 "type": "generate",
                 "platforms": platforms,
                 "topic": topic,
+                "has_source_material": has_source_material,
             }
         
         # 检查是否是帮助请求
-        if "帮助" in message or "help" in message or "怎么用" in message:
+        if "帮助" in message_lower or "help" in message_lower or "怎么用" in message_lower:
             return {"type": "help"}
         
         # 检查是否是状态请求
-        if "状态" in message or "进度" in message:
+        if "状态" in message_lower or "进度" in message_lower:
             return {"type": "status"}
         
         return {"type": "unknown"}
@@ -150,23 +200,25 @@ class ChatAgent:
         """处理生成请求"""
         platforms = intent["platforms"]
         topic = intent["topic"]
+        has_source_material = intent.get("has_source_material", False)
         
         # 如果没有提取到主题，使用原始消息
         if not topic or len(topic) < 5:
             topic = original_message
         
         try:
-            # 1. 搜索资料
-            search_result = execute_tool("search", query=topic[:200])
-            research_report = search_result.data if search_result.success else ""
+            # 1. 构建笔记。用户贴了完整素材时，优先忠实使用素材，避免搜索结果覆盖主题。
+            if has_source_material:
+                raw_notes = topic
+            else:
+                search_result = execute_tool("search", query=topic[:200])
+                research_report = search_result.data if search_result.success else ""
+                raw_notes = f"# {topic}\n\n## 搜索资料\n\n{research_report}\n\n## 主题\n\n{topic}"
             
-            # 2. 构建笔记
-            raw_notes = f"# {topic}\n\n## 搜索资料\n\n{research_report}\n\n## 主题\n\n{topic}"
-            
-            # 3. 选择策略
+            # 2. 选择策略
             strategy = self.selector.select(raw_notes)
             
-            # 4. 执行生成
+            # 3. 执行生成
             result = self.planner.plan_and_execute(raw_notes, platforms, strategy)
             
             # 5. 构建响应
@@ -186,7 +238,7 @@ class ChatAgent:
             for platform in platforms:
                 text = getattr(content, platform, "")
                 if text:
-                    output_text += f"---\n\n### {'公众号' if platform == 'gongzhonghao' else '小红书' if platform == 'xiaohongshu' else '抖音'}\n\n{text[:500]}...\n\n"
+                    output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
                     
                     # 保存文件
                     output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
