@@ -55,30 +55,45 @@ class TopicPicker:
         vault_path: str,
         keywords: Optional[str] = None,
         limit: int = 5,
+        trending_hint: Optional[str] = None,
     ) -> List[TopicSuggestion]:
-        """生成选题建议并保存到 DB"""
+        """
+        生成选题建议并保存到 DB
+
+        Args:
+            vault_path: Vault 目录路径
+            keywords: 搜索关键词
+            limit: 最多生成几条建议
+            trending_hint: 外部传入的热点文本（如热榜抓取结果），
+                          如果提供则跳过搜索，直接使用
+        """
         notes = self.scan_vault(vault_path)
         if not notes:
             print("[TopicPicker] Vault 中未找到笔记文件")
             return []
 
-        # 搜索热点
-        if keywords is None:
-            keywords = os.getenv("AGENT_TOPIC_KEYWORDS", "AI Agent, LLM, 大模型")
-        try:
-            trending = research_notes(
-                f"最近热点: {keywords}",
-                search_engine="duckduckgo",
-                max_results=5,
-                verbose=False,
-                keywords=[k.strip() for k in keywords.split(",")] if "," in keywords else None,
-            )
-        except Exception as e:
-            print(f"[TopicPicker] 搜索热点失败: {e}")
-            trending = ""
+        # 搜索热点（如果未提供 trending_hint）
+        if trending_hint:
+            trending = trending_hint
+            print(f"[TopicPicker] 使用外部热点提示，长度 {len(trending)} 字符")
+        else:
+            if keywords is None:
+                keywords = os.getenv("AGENT_TOPIC_KEYWORDS", "AI Agent, LLM, 大模型")
+            try:
+                kw_list = [k.strip() for k in keywords.split(",") if k.strip()] if "," in keywords else []
+                trending = research_notes(
+                    f"最近热点: {keywords}",
+                    search_engine="duckduckgo",
+                    max_results=5,
+                    verbose=False,
+                    keywords=kw_list if kw_list else [],
+                )
+            except Exception as e:
+                print(f"[TopicPicker] 搜索热点失败: {e}")
+                trending = ""
 
         # 构建 prompt
-        prompt = self._build_prompt(notes, trending, keywords)
+        prompt = self._build_prompt(notes, trending, keywords or "AI Agent")
 
         # 调用 LLM
         try:
@@ -93,11 +108,12 @@ class TopicPicker:
             print(f"[TopicPicker] LLM 生成失败: {e}")
             return []
 
-        # 保存到 DB
+        # 保存到 DB，并更新 suggestions 的 id
         now = datetime.now().isoformat()
         conn = _get_conn()
         for s in suggestions:
             sid = f"topic_{uuid.uuid4().hex[:12]}"
+            s.id = sid  # 更新对象 id
             conn.execute(
                 """
                 INSERT INTO topic_suggestions
@@ -157,6 +173,7 @@ class TopicPicker:
         return [_row_to_topic(r) for r in rows]
 
     def accept(self, suggestion_id: str) -> bool:
+        """接受选题，并自动触发生成"""
         conn = _get_conn()
         cur = conn.execute(
             "UPDATE topic_suggestions SET status = ? WHERE id = ?",
@@ -164,7 +181,21 @@ class TopicPicker:
         )
         conn.commit()
         conn.close()
-        return cur.rowcount > 0
+
+        if cur.rowcount > 0:
+            # 自动触发生成
+            try:
+                from automation.topic_executor import TopicExecutor
+                executor = TopicExecutor()
+                result = executor.execute(suggestion_id)
+                if result.get("success"):
+                    print(f"[TopicPicker] 已自动生成为 task_id={result['task_id']}, 入队 {result['queued']} 个平台")
+                else:
+                    print(f"[TopicPicker] 自动生成失败: {result.get('error')}")
+            except Exception as e:
+                print(f"[TopicPicker] 自动触发失败: {e}")
+            return True
+        return False
 
     def reject(self, suggestion_id: str) -> bool:
         conn = _get_conn()

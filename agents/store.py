@@ -192,7 +192,8 @@ def init_topic_suggestions_table():
             reason TEXT,
             priority INTEGER DEFAULT 3,
             status TEXT DEFAULT 'pending',
-            created_at TEXT
+            created_at TEXT,
+            generated_task_id TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_topics_status ON topic_suggestions(status);
         """
@@ -216,6 +217,46 @@ def init_ab_test_variants_table():
             created_at TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_ab_task ON ab_test_variants(task_id);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_eval_results_table():
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS eval_results (
+            id TEXT PRIMARY KEY,
+            task_id TEXT,
+            platform TEXT,
+            content_hash TEXT,
+            relevance_score INTEGER,
+            readability_score INTEGER,
+            originality_score INTEGER,
+            practicality_score INTEGER,
+            platform_fit_score INTEGER,
+            trend_match_score INTEGER,
+            overall_score REAL,
+            word_count INTEGER,
+            char_count INTEGER,
+            paragraph_count INTEGER,
+            emoji_count INTEGER,
+            tag_count INTEGER,
+            has_sensitive_words BOOLEAN,
+            has_link BOOLEAN,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            latency_ms INTEGER,
+            eval_latency_ms INTEGER,
+            model TEXT,
+            eval_model TEXT,
+            created_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_eval_task ON eval_results(task_id);
+        CREATE INDEX IF NOT EXISTS idx_eval_platform ON eval_results(platform);
+        CREATE INDEX IF NOT EXISTS idx_eval_created ON eval_results(created_at);
         """
     )
     conn.commit()
@@ -283,6 +324,7 @@ def init_db():
     init_style_profiles_table()
     init_topic_suggestions_table()
     init_ab_test_variants_table()
+    init_eval_results_table()
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)

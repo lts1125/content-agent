@@ -60,14 +60,17 @@ class PublishExecutor:
     @staticmethod
     def _publish_wechat(item: QueueItem) -> dict:
         from content_agent.publisher import publish_wechat_draft, save_content_as_markdown
+        import os
         try:
             md_path = save_content_as_markdown(item.title, item.content)
+            # 默认封面图从环境变量读取
+            default_cover = os.getenv("WECHAT_DEFAULT_COVER", "")
             result = publish_wechat_draft(
                 markdown_path=md_path,
                 title=item.title,
-                cover_path="",
-                author="",
-                digest="",
+                cover_path=default_cover,
+                author=os.getenv("WECHAT_AUTHOR", ""),
+                digest=item.content[:100] + "..." if len(item.content) > 100 else item.content,
             )
             return result
         except Exception as e:
@@ -122,7 +125,7 @@ class PublishExecutor:
     @staticmethod
     def _get_due_items() -> List[QueueItem]:
         from agents.store import _get_conn
-        now = datetime.now().isoformat()
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         conn = _get_conn()
         rows = conn.execute(
             """

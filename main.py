@@ -16,6 +16,7 @@ import argparse
 import datetime
 import os
 import sys
+import time
 from pathlib import Path
 from typing import List
 
@@ -357,6 +358,81 @@ def process_single_note_v2(
     return result
 
 
+def _run_trend_pipeline(args):
+    """P0: 热点监控完整流程"""
+    from automation import TrendScheduler, TopicPicker
+    
+    vault_path = args.vault or os.getenv("VAULT_PATH", os.path.expanduser("~/.content_agent/vault"))
+    
+    print("=" * 60)
+    print("🔥 热点监控流水线")
+    print("=" * 60)
+    
+    # Step 1: 检查热点
+    print("\n[1/4] 检查热点...")
+    scheduler = TrendScheduler()
+    result = scheduler.check_trends()
+    
+    if not result["matched"]:
+        print("   未匹配到相关热点，流程结束")
+        return
+    
+    print(f"   匹配到 {result['matched']} 条，评估通过 {result.get('passed', 0)} 条")
+    
+    # Step 2: 生成选题
+    print("\n[2/4] 生成选题建议...")
+    picker = TopicPicker()
+    suggestions = picker.pick_topics(
+        vault_path=vault_path,
+        trending_hint=result.get("trending_text", ""),
+        limit=args.trend_limit or 3
+    )
+    
+    if not suggestions:
+        print("   未生成选题建议")
+        return
+    
+    print(f"   生成 {len(suggestions)} 条选题:")
+    for s in suggestions:
+        print(f"   • [{s.priority}] {s.title}")
+        if s.trending_topic:
+            print(f"     关联热点: {s.trending_topic}")
+        print(f"     ID: {s.id}")
+    
+    # Step 3: 自动或半自动处理
+    if args.trend_auto:
+        print("\n[3/4] 自动接受所有选题...")
+        for s in suggestions:
+            picker.accept(s.id)
+            print(f"   已接受: {s.title[:40]}...")
+    else:
+        print("\n[3/4] 等待人工确认（使用 --trend-auto 可跳过）")
+        print("   请运行以下命令接受选题:")
+        for s in suggestions:
+            print(f"      python main.py --accept-topic {s.id}")
+        return
+    
+    # Step 4: 执行生成
+    print("\n[4/4] 执行选题生成内容...")
+    from automation import TopicExecutor
+    executor = TopicExecutor()
+    results = executor.execute_batch(limit=len(suggestions))
+    success = sum(1 for r in results if r["success"])
+    print(f"   完成: {success}/{len(results)} 个选题执行成功")
+    
+    # 显示生成的队列项
+    if success > 0:
+        from automation import PublishQueue
+        items = PublishQueue.list(status="pending")
+        print(f"\n   待发队列新增 {len(items)} 项:")
+        for item in items[:5]:
+            print(f"   • [{item.platform}] {item.title[:40]}...")
+    
+    print("\n" + "=" * 60)
+    print("✅ 热点流水线完成")
+    print("=" * 60)
+
+
 def _handle_agent_mode(args):
     """处理 Agent 模式 CLI 参数"""
     import shutil
@@ -398,6 +474,27 @@ def _handle_agent_mode(args):
         for r in results:
             if not r["success"]:
                 print(f"   ❌ {r.get('error', '未知错误')}")
+        return
+
+    # ---- B1: 自触发调度 ----
+    if args.schedule_once:
+        from automation import TaskScheduler, SchedulerConfig
+        config = SchedulerConfig.from_yaml(args.config) if args.config else SchedulerConfig.from_env()
+        scheduler = TaskScheduler(config)
+        scheduler.run_once()
+        return
+
+    if args.daemon:
+        from automation import TaskScheduler, SchedulerConfig
+        config = SchedulerConfig.from_yaml(args.config) if args.config else SchedulerConfig.from_env()
+        scheduler = TaskScheduler(config)
+        scheduler.start()
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\n👋 停止调度器")
+            scheduler.shutdown()
         return
 
     if args.queue:
@@ -560,11 +657,11 @@ def _handle_agent_mode(args):
         keywords = args.topic_keywords or os.getenv("AGENT_TOPIC_KEYWORDS")
         suggestions = picker.pick_topics(vault_path=vault_path, keywords=keywords)
         if suggestions:
-            print(f"\n💡 生成 {len(suggestions)} 条选题建议:")
+            print(f"\n生成 {len(suggestions)} 条选题建议:")
             for s in suggestions:
                 print(f"   • [{s.priority}] {s.title} ({s.trending_topic})")
         else:
-            print("⚠️ 未生成选题建议")
+            print("未生成选题建议")
         return
 
     if args.topics:
@@ -572,7 +669,7 @@ def _handle_agent_mode(args):
         picker = TopicPicker()
         items = picker.list_suggestions(status=args.topic_status)
         if not items:
-            print(f"📭 无 '{args.topic_status}' 状态的选题建议")
+            print(f"无 '{args.topic_status}' 状态的选题建议")
             return
         print(f"\n{'Title':<40} {'Status':<10} {'Priority'}")
         print("-" * 65)
@@ -585,13 +682,36 @@ def _handle_agent_mode(args):
     if args.accept_topic:
         from automation import TopicPicker
         ok = TopicPicker().accept(args.accept_topic)
-        print(f"{'✅ 已接受' if ok else '❌ 未找到'}: {args.accept_topic}")
+        if ok:
+            print(f"已接受: {args.accept_topic}")
+        else:
+            print(f"未找到: {args.accept_topic}")
         return
 
     if args.reject_topic:
         from automation import TopicPicker
         ok = TopicPicker().reject(args.reject_topic)
-        print(f"{'✅ 已拒绝' if ok else '❌ 未找到'}: {args.reject_topic}")
+        if ok:
+            print(f"已拒绝: {args.reject_topic}")
+        else:
+            print(f"未找到: {args.reject_topic}")
+        return
+
+    # ---- 批量执行 accepted 选题 ----
+    if args.execute_topics:
+        from automation import TopicExecutor
+        executor = TopicExecutor()
+        results = executor.execute_batch(limit=args.execute_limit)
+        success = sum(1 for r in results if r["success"])
+        print(f"\n完成: {success}/{len(results)} 个选题执行成功")
+        for r in results:
+            if not r["success"]:
+                print(f"   失败: {r.get('error', '未知错误')}")
+        return
+
+    # ---- P0: 热点监控全流程 ----
+    if args.trend_pipeline:
+        _run_trend_pipeline(args)
         return
 
     # ---- P1: A/B 测试 ----
@@ -627,6 +747,302 @@ def _handle_agent_mode(args):
         else:
             print("⚠️ 无结果数据")
         return
+
+    # ---- Eval 回归测试 ----
+    if args.eval_regression:
+        from automation.eval.regression import RegressionTester
+        tester = RegressionTester()
+        results = tester.run(quick=True)  # 快速模式
+        report = tester.generate_report(results)
+        print(report)
+        return
+
+    if args.eval_report:
+        from automation.eval.regression import RegressionTester
+        from agents.store import _get_conn
+        conn = _get_conn()
+        rows = conn.execute("SELECT * FROM eval_results ORDER BY created_at DESC LIMIT 10").fetchall()
+        conn.close()
+        if not rows:
+            print("📭 暂无评估数据")
+            return
+        print(f"\n最近 {len(rows)} 条评估记录:")
+        print(f"{'Task':<20} {'Platform':<12} {'Overall':<8} {'Time'}")
+        print("-" * 60)
+        for r in rows:
+            print(f"{r['task_id']:<20} {r['platform']:<12} {r['overall_score']:<8} {r['created_at']}")
+        return
+
+    # ---- ReAct Agent ----
+    if args.react:
+        _run_react_mode(args)
+        return
+
+    if args.publish_file:
+        _publish_file_mode(args)
+        return
+
+    if args.autonomous:
+        _run_react_mode(args)
+        return
+
+
+def _publish_file_mode(args):
+    """直接发布已生成的 Markdown 文件"""
+    from content_agent.publisher import publish_wechat_draft
+    from pathlib import Path
+
+    file_path = Path(args.publish_file)
+    if not file_path.exists():
+        print(f"❌ 文件不存在: {file_path}")
+        sys.exit(1)
+
+    print(f"📄 读取文件: {file_path}")
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 提取标题
+    lines = content.split("\n")
+    title = lines[0].replace("#", "").strip() if lines else "发布内容"
+
+    print(f"📝 标题: {title}")
+    print(f"📊 内容长度: {len(content)} 字")
+
+    # 发布
+    cover = args.cover or os.getenv("WECHAT_DEFAULT_COVER", "")
+    if not cover:
+        print("⚠️ 未设置封面图片（--cover 或 WECHAT_DEFAULT_COVER）")
+        response = input("是否继续发布? [y/N]: ")
+        if response.lower() != "y":
+            print("已取消")
+            return
+
+    print("\n📤 发布到公众号...")
+    try:
+        result = publish_wechat_draft(str(file_path), title=title, cover_path=cover)
+        if result.get("success"):
+            print(f"✅ 发布成功！")
+            print(f"   media_id: {result.get('details', '')[-50:]}")
+        else:
+            print(f"❌ 发布失败: {result.get('error', '未知错误')}")
+            print(f"   详情: {result.get('details', '')}")
+    except Exception as e:
+        print(f"❌ 发布异常: {e}")
+
+
+def _run_react_mode(args):
+    """运行 ReAct Agent 模式"""
+    from agents.react_agent import ReActAgent
+    from agents.store import _get_conn
+    import datetime
+
+    # 获取笔记内容
+    raw_notes = ""
+    if args.note_file:
+        with open(args.note_file, "r", encoding="utf-8") as f:
+            raw_notes = f.read()
+        print(f"📄 从文件读取笔记: {args.note_file}")
+    elif args.note_content:
+        raw_notes = args.note_content
+        print("📝 使用直接输入的笔记内容")
+    elif args.vault_note:
+        vault_path = os.getenv("VAULT_PATH", ".")
+        note_path = Path(vault_path) / args.vault_note
+        if note_path.exists():
+            with open(note_path, "r", encoding="utf-8") as f:
+                raw_notes = f.read()
+            print(f"📄 从 Vault 读取笔记: {note_path}")
+        else:
+            print(f"❌ Vault 笔记不存在: {note_path}")
+            sys.exit(1)
+    elif args.topic:
+        # 只提供主题，自动搜索资料
+        print(f"🎯 主题模式: {args.topic}")
+        print("🔍 正在搜索相关资料...")
+        from agents.tools import execute_tool
+        search_result = execute_tool("search", query=args.topic)
+        if search_result.success:
+            raw_notes = f"# {args.topic}\n\n## 搜索资料\n\n{search_result.data}\n\n## 主题\n\n{args.topic}"
+            print(f"✅ 搜索完成 ({len(search_result.data)} 字)")
+        else:
+            print(f"⚠️ 搜索失败: {search_result.error}")
+            raw_notes = f"# {args.topic}\n\n{args.topic}"
+    else:
+        print("❌ 请提供笔记内容（--note-file / --note-content / --vault-note / --topic）")
+        sys.exit(1)
+
+    # 解析平台
+    PLATFORM_MAP = {
+        "公众号": "gongzhonghao",
+        "微信": "gongzhonghao",
+        "小红书": "xiaohongshu",
+        "抖音": "douyin",
+    }
+    platforms = []
+    for p in (args.platforms or "gongzhonghao").split(","):
+        p = p.strip()
+        platforms.append(PLATFORM_MAP.get(p, p))
+    print(f"🎯 目标平台: {', '.join(platforms)}")
+
+    # 运行 Agent
+    if args.v2:
+        # 使用新架构（Orchestrator + 多 Agent 协作）
+        print("\n🚀 启动多 Agent 协作模式 (Orchestrator)...")
+        from agents.collaboration.orchestrator import Orchestrator
+        orch = Orchestrator()
+        orch_result = orch.run(raw_notes, platforms)
+
+        # 显示结果
+        print(f"\n✅ 生成完成！")
+        if orch_result.get("content"):
+            for platform in platforms:
+                content = getattr(orch_result["content"], platform, "")
+                if content:
+                    print(f"  {platform}: {len(content)} 字")
+
+        # 保存到文件
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if orch_result.get("content"):
+            for platform in platforms:
+                content = getattr(orch_result["content"], platform, "")
+                if content:
+                    file_path = output_dir / f"{platform}.md"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    print(f"  💾 已保存: {file_path}")
+
+        # 统一 result 变量用于后续配图生成
+        result = orch_result.get("content")
+    elif args.autonomous:
+        # 使用自主规划模式
+        print("\n🚀 启动自主规划模式...")
+        from agents.planning import StrategySelector, AutonomousPlanner
+
+        # 选择策略
+        selector = StrategySelector()
+        strategy = selector.select(raw_notes)
+
+        # 执行规划
+        planner = AutonomousPlanner()
+        plan_result = planner.plan_and_execute(raw_notes, platforms, strategy)
+
+        # 显示结果
+        print(f"\n✅ 生成完成！")
+        if plan_result.get("content"):
+            for platform in platforms:
+                content = getattr(plan_result["content"], platform, "")
+                if content:
+                    print(f"  {platform}: {len(content)} 字")
+
+        # 保存到文件
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if plan_result.get("content"):
+            for platform in platforms:
+                content = getattr(plan_result["content"], platform, "")
+                if content:
+                    file_path = output_dir / f"{platform}.md"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    print(f"  💾 已保存: {file_path}")
+
+        # 统一 result 变量用于后续配图生成
+        result = plan_result.get("content")
+    else:
+        # 使用旧架构（ReAct Agent）
+        print("\n🚀 启动 ReAct Agent...")
+        agent = ReActAgent(max_steps=3)
+        react_result = agent.run(raw_notes, platforms)
+
+        print(f"\n✅ 生成完成！")
+        print(f"步骤数: {len(react_result.steps)}")
+        for i, step in enumerate(react_result.steps):
+            print(f"  Step {i+1}: {step.thought[:60]}...")
+
+        # 显示内容预览
+        print(f"\n📊 生成结果:")
+        for platform in platforms:
+            content = getattr(react_result.content, platform, "")
+            print(f"  {platform}: {len(content)} 字")
+
+        # 保存到文件
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for platform in platforms:
+            content = getattr(react_result.content, platform, "")
+            if content:
+                file_path = output_dir / f"{platform}.md"
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"  💾 已保存: {file_path}")
+
+        # 统一 result 变量用于后续配图生成
+        result = react_result.content
+
+    # 生成小红书配图
+    if "xiaohongshu" in platforms:
+        try:
+            from content_agent.html_renderer import XiaohongshuRenderer
+            renderer = XiaohongshuRenderer()
+            html_path = renderer.render(result.xiaohongshu, output_dir / "配图")
+            print(f"  🎨 小红书配图已生成: {Path(html_path).name}")
+        except Exception as e:
+            print(f"  ⚠️ 小红书配图生成失败: {e}")
+
+    # 生成抖音配图
+    if "douyin" in platforms:
+        try:
+            from content_agent.douyin_renderer import DouyinRenderer
+            renderer = DouyinRenderer()
+            html_path = renderer.render(result.douyin, output_dir / "配图")
+            print(f"  🎨 抖音配图已生成: {Path(html_path).name}")
+        except Exception as e:
+            print(f"  ⚠️ 抖音配图生成失败: {e}")
+
+    # 自动发布（公众号）
+    if args.publish and "gongzhonghao" in platforms:
+        print("\n📤 自动发布公众号...")
+        from content_agent.publisher import publish_wechat_draft
+        import tempfile
+
+        content = result.gongzhonghao
+        if not content:
+            print("❌ 公众号内容为空，无法发布")
+            return
+
+        lines = content.split("\n")
+        title = lines[0].replace("#", "").strip() if lines else "ReAct 生成内容"
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
+            f.write(content)
+            temp_path = f.name
+
+        cover = args.cover or os.getenv("WECHAT_DEFAULT_COVER", "")
+        if not cover:
+            print("⚠️ 未设置封面图片（--cover 或 WECHAT_DEFAULT_COVER），发布可能失败")
+        
+        try:
+            pub_result = publish_wechat_draft(temp_path, title=title, cover_path=cover)
+            
+            import os as os2
+            os2.unlink(temp_path)
+
+            if pub_result.get("success"):
+                print(f"✅ 发布成功！media_id: {pub_result.get('details', '')[-50:]}")
+            else:
+                print(f"❌ 发布失败: {pub_result.get('error', '未知错误')}")
+                print(f"详情: {pub_result.get('details', '')}")
+        except Exception as e:
+            print(f"❌ 发布异常: {e}")
+            import os as os2
+            if os2.path.exists(temp_path):
+                os2.unlink(temp_path)
+
+    print(f"\n📂 输出目录: {output_dir}")
 
 
 def main():
@@ -683,6 +1099,9 @@ def main():
     agent_group = parser.add_mutually_exclusive_group()
     agent_group.add_argument("--watch", action="store_true", help="启动 Vault 监听模式")
     agent_group.add_argument("--process-inbox", action="store_true", help="批量处理 inbox 后退出")
+    agent_group.add_argument("--schedule-once", action="store_true", help="单次执行调度任务（扫描+生成+发布）")
+    agent_group.add_argument("--daemon", action="store_true", help="常驻后台运行调度器")
+    parser.add_argument("--config", type=str, help="调度配置文件路径（YAML）")
     parser.add_argument("--queue", action="store_true", help="查看待发队列")
     parser.add_argument("--status", default="pending", help="队列筛选状态")
     parser.add_argument("--approve", metavar="ID", help="审核通过指定队列项")
@@ -708,12 +1127,36 @@ def main():
     parser.add_argument("--topic-keywords", help="选题热点关键词（默认读取 AGENT_TOPIC_KEYWORDS）")
     parser.add_argument("--topics", action="store_true", help="查看选题建议")
     parser.add_argument("--topic-status", default="pending", help="选题建议筛选状态")
-    parser.add_argument("--accept-topic", metavar="ID", help="接受选题建议")
+    parser.add_argument("--accept-topic", metavar="ID", help="接受选题建议并自动生成为内容")
     parser.add_argument("--reject-topic", metavar="ID", help="拒绝选题建议")
+    parser.add_argument("--execute-topics", action="store_true", help="批量执行所有 accepted 选题")
+    parser.add_argument("--execute-limit", type=int, default=10, help="批量执行数量上限")
+    parser.add_argument("--trend-pipeline", action="store_true", help="[P0] 运行热点监控完整流程")
+    parser.add_argument("--trend-auto", action="store_true", help="[P0] 热点流程自动接受选题（无需人工确认）")
+    parser.add_argument("--trend-limit", type=int, default=3, help="[P0] 热点流程生成选题数量上限")
     parser.add_argument("--generate-ab", metavar="TYPES", help="生成 A/B 变体，如 title,hook")
     parser.add_argument("--ab-count", type=int, default=3, help="每种变体类型生成数量")
     parser.add_argument("--ab-queue-id", help="指定队列项 ID 生成 A/B 变体")
     parser.add_argument("--ab-results", metavar="TASK_ID", help="查看 A/B 测试结果")
+
+    # Eval 回归测试
+    parser.add_argument("--eval-regression", action="store_true", help="运行回归测试")
+    parser.add_argument("--eval-report", action="store_true", help="查看最近的回归测试报告")
+
+    # ReAct Agent
+    parser.add_argument("--react", action="store_true", help="使用 ReAct Agent 生成内容")
+    parser.add_argument("--note-file", help="指定笔记文件路径")
+    parser.add_argument("--note-content", help="直接输入笔记内容")
+    parser.add_argument("--vault-note", help="从 Vault 读取笔记文件名")
+    parser.add_argument("--topic", help="只提供主题，Agent 自动搜索资料并生成")
+    parser.add_argument("--publish", action="store_true", help="生成后自动发布（公众号）")
+    parser.add_argument("--cover", help="指定公众号封面图片路径")
+    parser.add_argument("--publish-file", help="直接发布已生成的 Markdown 文件（不重新生成）")
+    parser.add_argument(
+        "--autonomous",
+        action="store_true",
+        help="使用自主规划模式（自动识别内容类型并选择策略）"
+    )
 
     args = parser.parse_args()
 
@@ -727,12 +1170,16 @@ def main():
 
     # ---- Agent Mode 处理 ----
     agent_args = [
-        args.watch, args.process_inbox, args.queue, args.approve, args.reject,
+        args.watch, args.process_inbox, args.schedule_once, args.daemon,
+        args.queue, args.approve, args.reject,
         args.publish_next, args.publish_all, args.publish_scheduled,
         args.schedule, args.unschedule, args.retry_failed,
         args.import_metrics, args.analyze_feedback,
         args.show_profile, args.pick_topics, args.topics, args.accept_topic,
-        args.reject_topic, args.generate_ab, args.ab_results,
+        args.reject_topic, args.execute_topics, args.trend_pipeline,
+        args.generate_ab, args.ab_results,
+        args.eval_regression, args.eval_report,
+        args.react, args.publish_file, args.autonomous,
     ]
     if any(agent_args):
         if not HAS_NEW_ARCH:

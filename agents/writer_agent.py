@@ -61,7 +61,7 @@ DRAFT_SYSTEM_PROMPT = """你是一位全平台内容专家，擅长把技术学�
 【抖音口播脚本】
 - 开头前3秒必须有强钩子
 - 每句话不超过15个字，短句排比
-- 口语化，用"我"“你"“大家"等称呼
+- 口语化，用"我""你""大家"等称呼
 - 带画面提示（【镜头切到代码】【切换到页面】）
 - 中间有转折或悬念，尾部有行动号召
 - 全文200-400字，适合2-3分钟口播
@@ -81,6 +81,18 @@ DRAFT_SYSTEM_PROMPT = """你是一位全平台内容专家，擅长把技术学�
 要求：标签必须与笔记内容高度相关，避免泛泛而谈的热门词。
 
 核心原则：三个平台都必须基于同一份学习笔记，不编造内容，不流于表面，读者看完能复现学习路径。"""
+
+
+# 风格画像追加模板
+STYLE_PROFILE_APPENDIX = """
+
+【风格画像参考】
+根据历史数据分析，该平台高表现内容的特征如下：
+- 语气特征：{preferred_tone}
+- 高表现模式：{patterns}
+- 平均互动分：{avg_score}
+
+请优先采用上述高表现模式，生成符合平台偏好的内容。"""
 
 
 REFINE_SYSTEM_PROMPT = """你是一位资深编辑，根据审稿意见修改文案。
@@ -278,6 +290,93 @@ class WriterAgent:
         # 并发模式用的单平台 Agent（情性初始化，避免非并发模式下的额外开销）
         self._platform_agents: dict[str, PlatformWriterAgent] = {}
 
+    def _load_style_profile(self, platform: str) -> str:
+        """加载平台风格画像，追加到 system prompt"""
+        try:
+            from automation.feedback_agent import FeedbackAgent
+            agent = FeedbackAgent()
+            profile = agent.get_profile(platform)
+            if profile and profile.sample_count >= 5:
+                patterns = "、".join(profile.high_performing_patterns[:5])
+                return STYLE_PROFILE_APPENDIX.format(
+                    preferred_tone=profile.preferred_tone,
+                    patterns=patterns,
+                    avg_score=profile.avg_score,
+                )
+        except Exception:
+            pass
+        return ""
+
+    def _build_draft_prompt(self, raw_notes: str, platforms: List[str]) -> str:
+        """构建初稿 prompt，包含风格画像"""
+        # 根据平台列表构建平台特定 prompt
+        platform_prompts = {
+            "xiaohongshu": """【小红书笔记】
+- 标题吸睛，带emoji和数字
+- 开头一句话点出动机
+- 正文分步骤，每步带emoji编号，每步简洁明了
+- 保留核心概念和踩坑记录，但大白话解释
+- 结尾金句总结 + 互动问句
+- 添加3-5个话题标签（#xxx 格式）
+- 全文300-600字""",
+            "gongzhonghao": """【公众号文章】
+- 标题正式，可带副标题
+- 开头用导言引入，讲背景和动机
+- 正文分大章节，用## 标题分隔
+- 每个步骤详细展开：有原理解释、代码示例、实际场景
+- 包含具体的命令行代码块
+- 有"总结"和"下一步"部分
+- 全文1500-2500字，信息密度高""",
+            "douyin": """【抖音口播脚本】
+- 开头前3秒必须有强钩子
+- 每句话不超过15个字，短句排比
+- 口语化，用"我""你""大家"等称呼
+- 带画面提示（【镜头切到代码】【切换到页面】）
+- 中间有转折或悬念，尾部有行动号召
+- 全文200-400字，适合2-3分钟口播""",
+        }
+        
+        prompt = f"""你是一位全平台内容专家，擅长把技术学习笔记改写成指定平台的文案。
+
+输入是程序员的学习笔记，输出必须包含以下平台的文案和推荐标签：
+
+"""
+        for platform in platforms:
+            if platform in platform_prompts:
+                prompt += f"\n{platform_prompts[platform]}\n"
+        
+        prompt += """
+
+【推荐标签/话题】
+请基于笔记内容，额外输出各平台的推荐标签/话题，格式如下：
+
+📱 小红书（5-8个）：
+#标签1 #标签2 #标签3 ...
+
+💬 公众号（3-5个关键词）：
+关键词1、关键词2、关键词3 ...
+
+🎥 抖音（3-5个）：
+#话题1 #话题2 #话题3 ...
+
+要求：标签必须与笔记内容高度相关，避免泛泛而谈的热门词。
+
+核心原则：内容必须基于学习笔记，不编造内容，不流于表面，读者看完能复现学习路径。
+
+---
+
+笔记内容：
+"""
+        prompt += raw_notes
+        
+        # 追加风格画像
+        for platform in platforms:
+            profile_text = self._load_style_profile(platform)
+            if profile_text:
+                prompt += f"\n\n【{platform} 风格画像】{profile_text}"
+        
+        return prompt
+
     def _get_platform_agent(self, platform: str) -> PlatformWriterAgent:
         if platform not in self._platform_agents:
             self._platform_agents[platform] = PlatformWriterAgent(platform, self.model)
@@ -290,15 +389,22 @@ class WriterAgent:
         platforms: List[str],
         style: str = "default",
         concurrent: bool = False,
+        feedback: str = "",
     ) -> WriterOutput:
         """生成初稿
 
         Args:
             concurrent: 是否按平台并发生成。默认 False（单次调用生成三平台）。
+            feedback: Editor 的反馈，用于修改
         """
+        if feedback:
+            # 有反馈，使用 refine 模式
+            return self._run_with_feedback(raw_notes, platforms, feedback)
+
         if not concurrent or len(platforms) <= 1:
-            # 非并发模式：保持现有行为
-            result = self._draft_agent.run_sync(raw_notes)
+            # 非并发模式：保持现有行为，追加风格画像
+            prompt = self._build_draft_prompt(raw_notes, platforms)
+            result = self._draft_agent.run_sync(prompt)
             return result.output
 
         # 并发模式：每个平台独立调用
@@ -431,3 +537,20 @@ class WriterAgent:
             revision_notes=f"【{weakest} 精修】按审稿意见修改。{refined.revision_notes}",
         )
         return output
+
+    # --------------------- 带反馈生成 ---------------------
+    def _run_with_feedback(
+        self,
+        raw_notes: str,
+        platforms: List[str],
+        feedback: str,
+    ) -> WriterOutput:
+        """根据 Editor 反馈生成"""
+        prompt = (
+            f"请根据以下反馈修改内容：\n\n"
+            f"反馈：\n{feedback}\n\n"
+            f"原始笔记：\n{raw_notes[:1500]}\n\n"
+            f"请生成 {', '.join(platforms)} 平台的内容。"
+        )
+        result = self._refine_agent.run_sync(prompt)
+        return result.output

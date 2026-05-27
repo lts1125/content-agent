@@ -84,6 +84,61 @@ class EditorAgent:
             output_type=EditVerdict,
         )
 
+    def run_single(self, platform: str, content: str) -> EditVerdict:
+        """只评估单个平台"""
+        # 根据平台选择检查方法
+        if platform == "xiaohongshu":
+            rule_result = self.rule_checker.check_xiaohongshu(content)
+        elif platform == "gongzhonghao":
+            rule_result = self.rule_checker.check_gongzhonghao(content)
+        elif platform == "douyin":
+            rule_result = self.rule_checker.check_douyin(content)
+        else:
+            return EditVerdict(
+                overall=0, passed=False, verdict="retry",
+                weakest=platform, suggestions=[f"未知平台: {platform}"],
+                priority="high"
+            )
+
+        # 计算分数
+        checks = list(rule_result["checks"].values())
+        score = round(sum(checks) / len(checks) * 100, 1) if checks else 0
+
+        if score < 70:
+            failed = [k for k, v in rule_result["checks"].items() if not v][:5]
+            return EditVerdict(
+                scores={platform: score},
+                overall=int(score),
+                passed=False,
+                verdict="retry",
+                weakest=platform,
+                suggestions=[f"{platform}: {', '.join(failed)}"],
+                priority="high",
+            )
+
+        # LLM 评分（简化版）
+        try:
+            prompt = f"""请对以下{platform}文案进行评分（0-100）并给出修改建议：
+
+{content}
+
+请输出评分和建议。"""
+            result = self.llm_agent.run_sync(prompt)
+            if hasattr(result, 'output') and hasattr(result.output, 'overall'):
+                return result.output
+        except Exception:
+            pass
+
+        return EditVerdict(
+            scores={platform: int(score)},
+            overall=int(score),
+            passed=True,
+            verdict="pass",
+            weakest=platform,
+            suggestions=["规则检查通过"],
+            priority="low",
+        )
+
     def run(self, xiaohongshu: str, gongzhonghao: str, douyin: str, attempt: int = 1) -> EditVerdict:
         """混合检查入口"""
         # ---- 阶段 1: 规则校验 ----
