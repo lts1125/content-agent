@@ -78,9 +78,9 @@ python main.py --react --note-file ~/notes/mcp.md --platforms gongzhonghao,xiaoh
 
 ## 详细文档
 
-- [CLI 使用手册](docs/cli_usage.md) — 完整命令参考
-- [ReAct Agent 使用说明](docs/react_cli_usage.md) — ReAct 模式详解
-- [架构设计](docs/architecture_decisions.md) — 技术架构决策
+- [CLI 使用手册](docs/phase5_cli_usage.md) — 完整命令参考
+- [架构设计](docs/phase5_architecture_decisions.md) — 技术架构决策
+- [INDEX](INDEX.md) — 笔记索引
 - [实现笔记](notes/) — 开发过程记录
 
 ---
