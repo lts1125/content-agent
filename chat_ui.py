@@ -19,13 +19,29 @@ from datetime import datetime
 from pathlib import Path
 
 # 调试日志
-_LOG_PATH = os.path.join(os.path.expanduser("~"), ".content_agent", "chat_ui.log")
-os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
-logging.basicConfig(
-    filename=_LOG_PATH,
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+_LOG_PATH = os.getenv(
+    "CHAT_UI_LOG_PATH",
+    os.path.join(os.path.expanduser("~"), ".content_agent", "chat_ui.log"),
 )
+try:
+    os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+except OSError:
+    _LOG_PATH = os.path.join(Path(__file__).resolve().parent, "data", "logs", "chat_ui.log")
+    os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+try:
+    logging.basicConfig(
+        filename=_LOG_PATH,
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
+except OSError:
+    _LOG_PATH = os.path.join(Path(__file__).resolve().parent, "data", "logs", "chat_ui.log")
+    os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+    logging.basicConfig(
+        filename=_LOG_PATH,
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+    )
 logger = logging.getLogger("chat_ui")
 logger.info("=== chat_ui 初始化开始 ===")
 
@@ -253,7 +269,7 @@ class ChatAgent:
 def create_chat_ui():
     """创建聊天界面"""
     agent = ChatAgent()
-    
+
     def respond(message, chat_history):
         """处理用户消息"""
         # 添加用户消息
@@ -263,6 +279,7 @@ def create_chat_ui():
         result = agent.process_message(message)
         
         # 构建响应
+        gzh_path = ""
         if result["type"] == "content":
             # 有生成内容
             response = result["content"]
@@ -270,28 +287,70 @@ def create_chat_ui():
                 response += "\n\n📁 **生成文件：**\n"
                 for f in result["files"]:
                     response += f"- {f}\n"
+                # 提取公众号文件路径
+                for f in result["files"]:
+                    if "gongzhonghao" in f:
+                        gzh_path = f
+                        break
         else:
             response = result["content"]
         
         # 添加助手消息
         chat_history.append({"role": "assistant", "content": response})
         
-        return "", chat_history
+        return "", chat_history, gzh_path
     
     def clear_history():
         """清空历史"""
         agent.history = []
-        return []
+        return [], ""
     
-    # 构建界面
+    def publish_gzh(cover_image, gzh_file_path):
+        """发布到微信公众号草稿箱"""
+        if not gzh_file_path:
+            return "❌ 请先生成公众号内容"
+        if not cover_image:
+            return "❌ 请上传封面图片"
+        
+        try:
+            from content_agent.publisher import publish_wechat_draft
+            # 读取文件内容提取标题（第一行 # 标题）
+            content = Path(gzh_file_path).read_text(encoding="utf-8")
+            title = content.splitlines()[0].lstrip("# ").strip() if content else "Generated Article"
+            if not title:
+                title = "Generated Article"
+            
+            result = publish_wechat_draft(
+                markdown_path=gzh_file_path,
+                title=title,
+                cover_path=cover_image,
+            )
+            if result.get("success"):
+                return f"✅ {result.get('message', '发布成功')}"
+            else:
+                return f"❌ {result.get('message', '发布失败')}\n详情: {result.get('details', '')}"
+        except Exception as e:
+            return f"❌ 发布异常: {str(e)}"
+    
+    # 构建界面 - 使用系统字体避免加载 Google Fonts（国内网络阻塞问题）
+    theme = gr.themes.Soft(
+        font=["system-ui", "SF Pro Display", "Segoe UI", "PingFang SC", "Microsoft YaHei", "sans-serif"],
+        font_mono=["SF Mono", "SFMono-Regular", "Consolas", "Liberation Mono", "Menlo", "monospace"],
+    )
+    
     with gr.Blocks(
         title="Content Agent - 聊天模式",
-        theme=gr.themes.Soft(),
+        theme=theme,
         css="""
         .chat-container { height: 600px; }
         .input-box { margin-top: 20px; }
+        .publish-box { margin-top: 16px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; }
         """
     ) as demo:
+        # 存储最后一次生成的公众号文件路径。State 必须创建在 Blocks 内，
+        # 否则事件输出会引用未注册组件，导致 Gradio 前端/API 报错。
+        last_gzh_file = gr.State("")
+
         gr.Markdown("""
         # 🤖 Content Agent - AI 内容创作助手
         
@@ -322,60 +381,76 @@ def create_chat_ui():
         
         # 快捷按钮
         with gr.Row():
-            gr.Button("📱 公众号文章", size="sm").click(
-                lambda: respond("帮我写一篇技术文章的公众号版本", []),
-                outputs=[msg_input, chatbot]
-            )
-            gr.Button("📕 小红书笔记", size="sm").click(
-                lambda: respond("生成小红书笔记", []),
-                outputs=[msg_input, chatbot]
-            )
-            gr.Button("🎵 抖音文案", size="sm").click(
-                lambda: respond("生成抖音口播脚本", []),
-                outputs=[msg_input, chatbot]
-            )
+            btn_gzh = gr.Button("📱 公众号文章", size="sm")
+            btn_xhs = gr.Button("📕 小红书笔记", size="sm")
+            btn_dy = gr.Button("🎵 抖音文案", size="sm")
             clear_btn = gr.Button("🗑️ 清空对话", size="sm", variant="secondary")
+        
+        # 公众号发布区域
+        with gr.Row(variant="panel"):
+            with gr.Column(scale=1):
+                cover_upload = gr.Image(
+                    label="📷 公众号封面",
+                    type="filepath",
+                    height=150,
+                    show_label=True,
+                )
+            with gr.Column(scale=2):
+                pub_status = gr.Textbox(
+                    label="发布状态",
+                    value="等待生成内容...",
+                    interactive=False,
+                    show_label=True,
+                )
+                publish_btn = gr.Button("📤 发布到公众号草稿箱", variant="primary", size="sm")
         
         # 事件绑定
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot],
-            outputs=[msg_input, chatbot]
+            outputs=[msg_input, chatbot, last_gzh_file]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot],
-            outputs=[msg_input, chatbot]
+            outputs=[msg_input, chatbot, last_gzh_file]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot]
+            outputs=[chatbot, last_gzh_file]
         )
         
-        # 生成内容后，显示发布区域
-        with gr.Accordion("📤 发布到公众号", open=False) as publish_accordion:
-            gr.Markdown("上传封面图片，将生成的公众号文章发布到微信草稿箱")
-            
-            with gr.Row():
-                cover_image = gr.Image(
-                    label="封面图片",
-                    type="filepath",
-                    height=200,
-                )
-            
-            with gr.Row():
-                publish_btn = gr.Button("🚀 发布到公众号草稿箱", variant="primary")
-                publish_status = gr.Textbox(
-                    label="发布状态",
-                    interactive=False,
-                    value="等待发布...",
-                )
-            
-            # 存储最后生成的文件路径
-            last_generated_file = gr.State("")
-            last_generated_title = gr.State("")
+        # 快捷按钮事件
+        def quick_gzh():
+            return respond("帮我写一篇技术文章的公众号版本", [])
+        
+        def quick_xhs():
+            return respond("生成小红书笔记", [])
+        
+        def quick_dy():
+            return respond("生成抖音口播脚本", [])
+        
+        btn_gzh.click(
+            quick_gzh,
+            outputs=[msg_input, chatbot, last_gzh_file]
+        )
+        btn_xhs.click(
+            quick_xhs,
+            outputs=[msg_input, chatbot, last_gzh_file]
+        )
+        btn_dy.click(
+            quick_dy,
+            outputs=[msg_input, chatbot, last_gzh_file]
+        )
+        
+        # 发布按钮事件
+        publish_btn.click(
+            publish_gzh,
+            inputs=[cover_upload, last_gzh_file],
+            outputs=[pub_status]
+        )
         
         # 使用说明
         with gr.Accordion("📖 使用说明", open=False):
@@ -385,7 +460,7 @@ def create_chat_ui():
             1. **直接输入需求**：用自然语言描述你想创作的内容
             2. **指定平台**：可以指定公众号、小红书、抖音中的一个或多个
             3. **等待生成**：Agent 会自动搜索资料、选择策略、生成内容
-            4. **发布公众号**：生成公众号文章后，上传封面图片并点击发布
+            4. **发布公众号**：生成公众号文章后，上传封面图片，点击发布按钮
             
             ### 支持的指令
             
@@ -400,93 +475,11 @@ def create_chat_ui():
             - 描述越详细，生成内容越精准
             - 可以要求特定风格或格式
             - 生成后可以要求修改或调整
-            - 发布公众号需要封面图片（必需）
+            - 发布到公众号需要：
+              - 先生成公众号内容
+              - 上传封面图片（必填）
+              - 安装 kuaifa CLI (`npm install -g kuaifa`)
             """)
-        
-        # 发布功能
-        def publish_to_wechat(cover_path, file_path, title):
-            """发布到微信公众号"""
-            if not cover_path:
-                return "❌ 请上传封面图片"
-            
-            if not file_path or not os.path.exists(file_path):
-                return "❌ 没有可发布的文件，请先生成内容"
-            
-            try:
-                from content_agent.publisher import publish_wechat_draft
-                
-                result = publish_wechat_draft(
-                    markdown_path=file_path,
-                    title=title or "未命名文章",
-                    cover_path=cover_path,
-                )
-                
-                if result.get("success"):
-                    return f"✅ 发布成功！\n{result.get('message', '')}"
-                else:
-                    return f"❌ 发布失败\n{result.get('message', '')}\n{result.get('details', '')}"
-            except Exception as e:
-                return f"❌ 发布异常: {str(e)}"
-        
-        # 修改 respond 函数，保存最后生成的文件
-        def respond_with_save(message, chat_history):
-            """处理用户消息并保存文件路径"""
-            # 添加用户消息
-            chat_history.append({"role": "user", "content": message})
-            
-            # 处理消息
-            result = agent.process_message(message)
-            
-            # 构建响应
-            file_path = ""
-            file_title = ""
-            if result["type"] == "content":
-                response = result["content"]
-                if result.get("files"):
-                    response += "\n\n📁 **生成文件：**\n"
-                    for f in result["files"]:
-                        response += f"- {f}\n"
-                    
-                    # 保存公众号文件路径
-                    for f in result["files"]:
-                        if "gongzhonghao" in f:
-                            file_path = f
-                            # 提取标题
-                            try:
-                                with open(f, 'r', encoding='utf-8') as file:
-                                    first_line = file.readline().strip()
-                                    if first_line.startswith('# '):
-                                        file_title = first_line[2:]
-                            except:
-                                pass
-                            break
-            else:
-                response = result["content"]
-            
-            # 添加助手消息
-            chat_history.append({"role": "assistant", "content": response})
-            
-            return "", chat_history, file_path, file_title
-        
-        # 重新绑定事件
-        send_btn.click(
-            respond_with_save,
-            inputs=[msg_input, chatbot],
-            outputs=[msg_input, chatbot, last_generated_file, last_generated_title]
-        )
-        
-        msg_input.submit(
-            respond_with_save,
-            inputs=[msg_input, chatbot],
-            outputs=[msg_input, chatbot, last_generated_file, last_generated_title]
-        )
-        
-        # 发布按钮事件
-        publish_btn.click(
-            publish_to_wechat,
-            inputs=[cover_image, last_generated_file, last_generated_title],
-            outputs=[publish_status]
-        )
     
     return demo
 
