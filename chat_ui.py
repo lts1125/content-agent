@@ -83,6 +83,51 @@ def _patch_gradio_api_info_for_compatibility():
 
 _patch_gradio_api_info_for_compatibility()
 
+# Patch starlette TemplateResponse to bridge Gradio 4's old-style calls with newer starlette.
+def _patch_starlette_template_response():
+    try:
+        from starlette.templating import Jinja2Templates
+    except ImportError:
+        return
+
+    if getattr(Jinja2Templates, "_content_agent_template_patched", False):
+        return
+
+    _orig = Jinja2Templates.TemplateResponse
+
+    def _patched(self, *args, **kwargs):
+        # Gradio 4.44.x passes old-style positional args: TemplateResponse(name, context)
+        # Newer starlette expects: TemplateResponse(request, name, context)
+        if args and isinstance(args[0], str):
+            name = args[0]
+            context = args[1] if len(args) > 1 else kwargs.get("context", {})
+            status_code = args[2] if len(args) > 2 else kwargs.get("status_code", 200)
+            headers = args[3] if len(args) > 3 else kwargs.get("headers")
+            media_type = args[4] if len(args) > 4 else kwargs.get("media_type")
+            background = args[5] if len(args) > 5 else kwargs.get("background")
+
+            if "request" not in context:
+                raise ValueError('context must include a "request" key')
+            request = context["request"]
+
+            return _orig(
+                self,
+                request,
+                name,
+                context=context,
+                status_code=status_code,
+                headers=headers,
+                media_type=media_type,
+                background=background,
+            )
+        return _orig(self, *args, **kwargs)
+
+    Jinja2Templates.TemplateResponse = _patched
+    Jinja2Templates._content_agent_template_patched = True
+
+
+_patch_starlette_template_response()
+
 # 导入 Agent 组件
 from agents.tools import execute_tool
 from agents.planning import StrategySelector, AutonomousPlanner
