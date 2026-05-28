@@ -61,6 +61,33 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual("assistant", first_history[1]["role"])
         self.assertIn("🔄 分析需求", first_history[1]["content"])
         self.assertEqual("生成完成", final_history[-1]["content"])
+        self.assertEqual(4, len(updates[-1]))
+
+    def test_save_generated_markdown_files_returns_platform_files(self):
+        with TemporaryDirectory() as tmp_dir:
+            output_dir = Path(tmp_dir)
+            content = type(
+                "Content",
+                (),
+                {
+                    "gongzhonghao": "# 公众号文章\n\n完整内容",
+                    "xiaohongshu": "小红书完整内容",
+                },
+            )()
+
+            files = chat_ui._save_generated_markdown_files(
+                content,
+                ["gongzhonghao", "xiaohongshu"],
+                output_dir,
+            )
+
+            self.assertEqual(2, len(files))
+            self.assertTrue((output_dir / "gongzhonghao.md").exists())
+            self.assertTrue((output_dir / "xiaohongshu.md").exists())
+            self.assertEqual(
+                [str(output_dir / "gongzhonghao.md"), str(output_dir / "xiaohongshu.md")],
+                files,
+            )
 
 
 class ChatIntentTest(unittest.TestCase):

@@ -112,11 +112,34 @@ def _merge_progress_event(events: list, event: dict) -> list:
     return merged
 
 
-def _result_to_response(result: dict) -> tuple[str, str]:
-    """把 Agent 结果转换为聊天文本和公众号文件路径。"""
+def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
+    """保存各平台 Markdown，返回可下载的文件列表。"""
+    files = []
+
+    for platform in platforms:
+        text = getattr(content, platform, "")
+        if not text:
+            continue
+
+        file_path = output_dir / f"{platform}.md"
+        file_path.write_text(text, encoding="utf-8")
+        files.append(str(file_path))
+
+    return files
+
+
+def _download_files_update(files):
+    files = files or []
+    return gr.update(value=files if files else None, visible=bool(files))
+
+
+def _result_to_response(result: dict) -> tuple[str, str, list[str]]:
+    """把 Agent 结果转换为聊天文本、公众号文件路径和下载文件列表。"""
     gzh_path = ""
+    download_files = []
     if result["type"] == "content":
         response = result["content"]
+        download_files = result.get("files", [])
         if result.get("files"):
             response += "\n\n📁 **生成文件：**\n"
             for f in result["files"]:
@@ -125,9 +148,11 @@ def _result_to_response(result: dict) -> tuple[str, str]:
                 if "gongzhonghao" in f:
                     gzh_path = f
                     break
+        if download_files:
+            response += "\n📥 可以在下方按文件下载 Markdown。"
     else:
         response = result["content"]
-    return response, gzh_path
+    return response, gzh_path, download_files
 
 
 def _copy_chat_history(chat_history: list) -> list:
@@ -501,19 +526,14 @@ class ChatAgent:
             output_text += f"📋 使用策略: {strategy.name}\n"
             output_text += f"📊 评分: {result.get('verdict', {}).overall if result.get('verdict') else 'N/A'}/100\n\n"
             
-            files = []
             for platform in platforms:
                 text = getattr(content, platform, "")
                 if text:
                     output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
-                    
-                    # 保存文件
-                    output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    file_path = output_dir / f"{platform}.md"
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(text)
-                    files.append(str(file_path))
+
+            output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            files = _save_generated_markdown_files(content, platforms, output_dir)
             
             return {
                 "type": "content",
@@ -655,10 +675,7 @@ class ChatAgent:
                 text = getattr(content, platform, "")
                 if text:
                     output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
-                    file_path = output_dir / f"{platform}.md"
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(text)
-                    files.append(str(file_path))
+            files = _save_generated_markdown_files(content, platforms, output_dir)
 
             yield {
                 "type": "progress",
@@ -763,12 +780,13 @@ def _respond_stream(agent, message, chat_history, note_file=None):
         )
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
-        yield "", _copy_chat_history(chat_history), ""
+        yield "", _copy_chat_history(chat_history), "", _download_files_update([])
         return
 
     progress_events = []
     progress_index = None
     gzh_path = ""
+    download_files = []
 
     for payload in agent.process_message_stream(process_message):
         if payload.get("type") == "progress":
@@ -779,23 +797,23 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 progress_index = len(chat_history) - 1
             else:
                 chat_history[progress_index]["content"] = progress_content
-            yield "", _copy_chat_history(chat_history), gzh_path
+            yield "", _copy_chat_history(chat_history), gzh_path, _download_files_update(download_files)
             continue
 
         if payload.get("type") == "result":
-            response, gzh_path = _result_to_response(payload["result"])
+            response, gzh_path, download_files = _result_to_response(payload["result"])
             if progress_index is None:
                 chat_history.append({"role": "assistant", "content": response})
             else:
                 chat_history[progress_index]["content"] = response
-            yield "", _copy_chat_history(chat_history), gzh_path
+            yield "", _copy_chat_history(chat_history), gzh_path, _download_files_update(download_files)
             return
 
     if progress_index is not None:
         chat_history[progress_index]["content"] = "⚠️ 生成流程没有返回结果，请重试。"
     else:
         chat_history.append({"role": "assistant", "content": "⚠️ 生成流程没有返回结果，请重试。"})
-    yield "", _copy_chat_history(chat_history), gzh_path
+    yield "", _copy_chat_history(chat_history), gzh_path, _download_files_update(download_files)
 
 
 def create_chat_ui():
@@ -809,7 +827,7 @@ def create_chat_ui():
     def clear_history():
         """清空历史"""
         agent.history = []
-        return [], ""
+        return [], "", _download_files_update([])
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -890,6 +908,15 @@ def create_chat_ui():
             file_types=[".md", ".txt"],
             type="filepath",
         )
+
+        download_files = gr.File(
+            label="下载生成内容（Markdown）",
+            value=None,
+            file_count="multiple",
+            type="filepath",
+            interactive=False,
+            visible=False,
+        )
         
         # 快捷按钮
         with gr.Row():
@@ -920,18 +947,18 @@ def create_chat_ui():
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file]
+            outputs=[msg_input, chatbot, last_gzh_file, download_files]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file]
+            outputs=[msg_input, chatbot, last_gzh_file, download_files]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot, last_gzh_file]
+            outputs=[chatbot, last_gzh_file, download_files]
         )
         
         # 快捷按钮事件
@@ -946,15 +973,15 @@ def create_chat_ui():
         
         btn_gzh.click(
             quick_gzh,
-            outputs=[msg_input, chatbot, last_gzh_file]
+            outputs=[msg_input, chatbot, last_gzh_file, download_files]
         )
         btn_xhs.click(
             quick_xhs,
-            outputs=[msg_input, chatbot, last_gzh_file]
+            outputs=[msg_input, chatbot, last_gzh_file, download_files]
         )
         btn_dy.click(
             quick_dy,
-            outputs=[msg_input, chatbot, last_gzh_file]
+            outputs=[msg_input, chatbot, last_gzh_file, download_files]
         )
         
         # 发布按钮事件
