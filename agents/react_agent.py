@@ -127,19 +127,24 @@ class ReActAgent:
             step2.observation = "生成完成" if result.success else f"错误: {result.error}"
             steps.append(step2)
         else:
-            step2 = step1
             result = execute_tool("generate", raw_notes=raw_notes, platforms=platforms)
-            step2.observation = "生成完成" if result.success else f"错误: {result.error}"
+            step2 = ReActStep(
+                thought="用户已提供完整笔记，跳过搜索判断，直接生成。",
+                action=f"generate(platforms={platforms})",
+                observation="生成完成" if result.success else f"错误: {result.error}",
+            )
             if not search_done:
                 steps.append(step2)
 
         if not result.success or not isinstance(result.data, WriterOutput):
-            return ReActOutput(
+            output = ReActOutput(
                 content=WriterOutput(),
                 steps=steps,
                 reasoning="生成失败",
                 final_score=0,
             )
+            self._save_trace(output, save_trace_path, platforms)
+            return output
 
         current_content = result.data
 
@@ -152,12 +157,15 @@ class ReActAgent:
 
             if score >= 80:
                 # 评分通过
-                return ReActOutput(
+                print(f"   ✅ 修改后重新评估通过 (评分: {score}/100)")
+                output = ReActOutput(
                     content=current_content,
                     steps=steps,
                     reasoning=f"完成：分析 -> {'搜索 -> ' if search_done else ''}生成 -> 评估通过(评分: {score})",
                     final_score=score,
                 )
+                self._save_trace(output, save_trace_path, platforms)
+                return output
 
             # 评分未通过，反思修改
             if attempt < 2:  # 还有修改机会
@@ -194,25 +202,27 @@ class ReActAgent:
             reasoning=f"完成：分析 -> {'搜索 -> ' if search_done else ''}生成 -> 评估({score}分) -> 多次修改未达标",
             final_score=score,
         )
-
-        # 持久化执行轨迹
-        if save_trace_path:
-            try:
-                trace_data = {
-                    "reasoning": output.reasoning,
-                    "final_score": output.final_score,
-                    "steps": [
-                        {"thought": s.thought, "action": s.action, "observation": s.observation}
-                        for s in output.steps
-                    ],
-                    "platforms": platforms,
-                }
-                with open(save_trace_path, "w", encoding="utf-8") as f:
-                    json.dump(trace_data, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                print(f"   ⚠️ ReAct: 轨迹保存失败: {e}")
-
+        self._save_trace(output, save_trace_path, platforms)
         return output
+
+    def _save_trace(self, output: ReActOutput, save_trace_path: Optional[str], platforms: List[str]):
+        """持久化执行轨迹到 JSON 文件"""
+        if not save_trace_path:
+            return
+        try:
+            trace_data = {
+                "reasoning": output.reasoning,
+                "final_score": output.final_score,
+                "steps": [
+                    {"thought": s.thought, "action": s.action, "observation": s.observation}
+                    for s in output.steps
+                ],
+                "platforms": platforms,
+            }
+            with open(save_trace_path, "w", encoding="utf-8") as f:
+                json.dump(trace_data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"   ⚠️ ReAct: 轨迹保存失败: {e}")
 
     def _evaluate_step(self, content: WriterOutput, platforms: List[str], attempt: int):
         """执行评估步骤，返回 (step, score, verdict)

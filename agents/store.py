@@ -450,7 +450,7 @@ def load_task(task_id: str) -> Optional[TaskState]:
         research_data=_dict_to_research(json.loads(row["research_data"]) if row["research_data"] else None),
         final_output=_dict_to_writer_output(json.loads(row["final_output"]) if row["final_output"] else None),
         metadata=json.loads(row["metadata"]) if row["metadata"] else {},
-        trace=json.loads(row["trace"]) if row.get("trace") else None,
+        trace=json.loads(row["trace"]) if row["trace"] else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

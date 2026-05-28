@@ -4,7 +4,7 @@
 根据策略自动执行流程
 """
 
-from typing import List
+from typing import Callable, List, Optional
 
 from agents.collaboration.context import AgentContext, AgentMessage
 from agents.collaboration.orchestrator import Orchestrator
@@ -31,7 +31,13 @@ class AutonomousPlanner:
     def __init__(self):
         self.orchestrator = Orchestrator()
 
-    def plan_and_execute(self, raw_notes: str, platforms: List[str], strategy: Strategy) -> dict:
+    def plan_and_execute(
+        self,
+        raw_notes: str,
+        platforms: List[str],
+        strategy: Strategy,
+        progress_callback: Optional[Callable[[dict], None]] = None,
+    ) -> dict:
         """
         根据策略自动执行流程
 
@@ -52,46 +58,172 @@ class AutonomousPlanner:
             raw_notes=raw_notes,
         )
 
-        # 执行策略步骤
-        for step_idx, step in enumerate(strategy.steps):
+        # 分离前置步骤和评估循环步骤
+        pre_steps = [s for s in strategy.steps if s not in ("evaluate", "modify")]
+        has_evaluate = "evaluate" in strategy.steps
+        has_modify = "modify" in strategy.steps
+
+        # 执行前置步骤
+        for step_idx, step in enumerate(pre_steps):
             print(f"\n🔹 Step {step_idx + 1}/{len(strategy.steps)}: {step}")
+            self._emit_progress(
+                progress_callback,
+                step=step,
+                title=self._step_title(step),
+                status="running",
+                detail=self._step_running_detail(step),
+                step_index=step_idx + 1,
+                total_steps=len(strategy.steps),
+            )
+            result = self._execute_step(step, context, raw_notes, platforms)
+            self._emit_progress(
+                progress_callback,
+                step=step,
+                title=self._step_title(step),
+                status="done" if result.get("success", True) else "warning",
+                detail=self._step_done_detail(step, result),
+                step_index=step_idx + 1,
+                total_steps=len(strategy.steps),
+            )
 
-            if step == "search":
-                result = self._execute_search(context, raw_notes)
-            elif step == "browse":
-                result = self._execute_browse(context)
-            elif step == "read":
-                result = self._execute_read(context, raw_notes)
-            elif step == "execute":
-                result = self._execute_code(context)
-            elif step == "analyze":
-                result = self._execute_analyze(context)
-            elif step == "generate":
-                result = self._execute_generate(context, raw_notes, platforms)
-            elif step == "evaluate":
+        # 执行评估-修改循环（最多 3 轮）
+        if has_evaluate:
+            for attempt in range(3):
+                eval_idx = strategy.steps.index("evaluate") if "evaluate" in strategy.steps else len(strategy.steps) - 1
+                print(f"\n🔹 Step {eval_idx + 1}/{len(strategy.steps)}: evaluate (第 {attempt + 1} 轮)")
+                self._emit_progress(
+                    progress_callback,
+                    step=f"evaluate-{attempt + 1}",
+                    title=f"质量评估（第 {attempt + 1} 轮）",
+                    status="running",
+                    detail="正在评估内容质量",
+                    step_index=eval_idx + 1,
+                    total_steps=len(strategy.steps),
+                )
                 result = self._execute_evaluate(context, platforms)
-            elif step == "modify":
-                result = self._execute_modify(context, raw_notes, platforms)
-            else:
-                print(f"   ⚠️ 未知步骤: {step}")
-                continue
-
-            context.add_message("Planner", step, "result", str(result)[:200])
-
-            # 检查是否需要提前终止
-            if step == "evaluate" and isinstance(result, dict):
                 score = result.get("score", 0)
+                self._emit_progress(
+                    progress_callback,
+                    step=f"evaluate-{attempt + 1}",
+                    title=f"质量评估（第 {attempt + 1} 轮）",
+                    status="done" if result.get("success") else "warning",
+                    detail=f"评分：{score}/100",
+                    step_index=eval_idx + 1,
+                    total_steps=len(strategy.steps),
+                )
+
                 if score >= strategy.threshold:
-                    print(f"   ✅ 评分达标 ({score}/{strategy.threshold})，提前结束")
+                    print(f"   ✅ 评分达标 ({score}/{strategy.threshold})")
+                    self._emit_progress(
+                        progress_callback,
+                        step=f"evaluate-{attempt + 1}",
+                        title=f"质量评估（第 {attempt + 1} 轮）",
+                        status="done",
+                        detail=f"评分达标：{score}/{strategy.threshold}",
+                        step_index=eval_idx + 1,
+                        total_steps=len(strategy.steps),
+                    )
                     break
 
-        # 返回结果
+                if has_modify and attempt < 2:
+                    modify_idx = strategy.steps.index("modify") if "modify" in strategy.steps else len(strategy.steps) - 1
+                    print(f"\n🔹 Step {modify_idx + 1}/{len(strategy.steps)}: modify (第 {attempt + 1} 轮)")
+                    self._emit_progress(
+                        progress_callback,
+                        step=f"modify-{attempt + 1}",
+                        title=f"根据反馈修改（第 {attempt + 1} 轮）",
+                        status="running",
+                        detail="正在根据评估建议修改",
+                        step_index=modify_idx + 1,
+                        total_steps=len(strategy.steps),
+                    )
+                    result = self._execute_modify(context, raw_notes, platforms)
+                    self._emit_progress(
+                        progress_callback,
+                        step=f"modify-{attempt + 1}",
+                        title=f"根据反馈修改（第 {attempt + 1} 轮）",
+                        status="done" if result.get("success", True) else "warning",
+                        detail="修改完成" if result.get("success", True) else "修改未完成",
+                        step_index=modify_idx + 1,
+                        total_steps=len(strategy.steps),
+                    )
+                else:
+                    print(f"   ⚠️ 已达最大修改次数")
+                    break
+
         return {
             "content": context.draft_content,
             "verdict": context.edit_verdict,
             "history": context.history,
             "strategy": strategy.name,
         }
+
+    def _execute_step(self, step: str, context: AgentContext, raw_notes: str, platforms: List[str]) -> dict:
+        """执行单个步骤"""
+        if step == "search":
+            result = self._execute_search(context, raw_notes)
+        elif step == "browse":
+            result = self._execute_browse(context)
+        elif step == "read":
+            result = self._execute_read(context, raw_notes)
+        elif step == "execute":
+            result = self._execute_code(context)
+        elif step == "analyze":
+            result = self._execute_analyze(context)
+        elif step == "generate":
+            result = self._execute_generate(context, raw_notes, platforms)
+        elif step == "evaluate":
+            result = self._execute_evaluate(context, platforms)
+        elif step == "modify":
+            result = self._execute_modify(context, raw_notes, platforms)
+        else:
+            print(f"   ⚠️ 未知步骤: {step}")
+            result = {}
+
+        context.add_message("Planner", step, "result", str(result)[:200])
+        return result
+
+    @staticmethod
+    def _emit_progress(callback: Optional[Callable[[dict], None]], **event):
+        if callback:
+            callback(event)
+
+    @staticmethod
+    def _step_title(step: str) -> str:
+        return {
+            "search": "搜索相关资料",
+            "browse": "整理网页资料",
+            "read": "读取参考文件",
+            "execute": "代码验证",
+            "analyze": "分析资料",
+            "generate": "生成内容",
+            "evaluate": "质量评估",
+            "modify": "根据反馈修改",
+        }.get(step, step)
+
+    @staticmethod
+    def _step_running_detail(step: str) -> str:
+        return {
+            "search": "正在搜索相关资料",
+            "browse": "正在浏览网页获取详细信息",
+            "read": "正在读取参考文件",
+            "execute": "正在执行代码验证",
+            "analyze": "正在分析资料",
+            "generate": "正在生成内容",
+        }.get(step, "正在执行")
+
+    @staticmethod
+    def _step_done_detail(step: str, result: dict) -> str:
+        if step == "search" and result.get("success") and result.get("data"):
+            return f"搜索完成（{len(result.get('data', ''))} 字摘要）"
+        return {
+            "search": "搜索完成" if result.get("success") else "搜索失败，继续使用已有内容",
+            "browse": "资料整理完成",
+            "read": "文件读取完成",
+            "execute": "代码验证完成",
+            "analyze": "分析完成",
+            "generate": "内容生成完成",
+        }.get(step, "执行完成")
 
     def _execute_search(self, context: AgentContext, topic: str) -> dict:
         """执行搜索"""
@@ -188,13 +320,24 @@ class AutonomousPlanner:
         if context.edit_verdict and hasattr(context.edit_verdict, 'suggestions'):
             suggestions = context.edit_verdict.suggestions
             if suggestions:
-                feedback = suggestions[0]
-                result = execute_tool("generate", raw_notes=raw_notes, platforms=platforms)
-                if result.success and isinstance(result.data, WriterOutput):
-                    context.draft_content = result.data
+                writer = self.orchestrator.agents.get("Writer")
+                if writer and context.draft_content:
+                    refined = writer.refine(
+                        prev_draft=context.draft_content,
+                        verdict=context.edit_verdict,
+                        raw_notes=raw_notes,
+                        platforms=platforms,
+                    )
+                    context.draft_content = refined
                     print("   ✅ 修改完成")
                 else:
-                    print(f"   ⚠️ 修改失败: {result.error}")
+                    print("   ⚠️ Writer Agent 不可用，尝试直接重新生成")
+                    result = execute_tool("generate", raw_notes=raw_notes, platforms=platforms)
+                    if result.success and isinstance(result.data, WriterOutput):
+                        context.draft_content = result.data
+                        print("   ✅ 修改完成")
+                    else:
+                        print(f"   ⚠️ 修改失败: {result.error}")
             else:
                 print("   ⏭️ 无修改建议")
         else:

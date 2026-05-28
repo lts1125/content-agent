@@ -9,6 +9,9 @@ import os
 import re
 import sys
 import json
+import queue
+import threading
+import time
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -560,6 +563,20 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
 
     yield "", "", "", "", "", "⏳ 正在初始化 Agent，请稍候...", history
 
+    # ---- 实时日志捕获辅助类 ----
+    class _QueueStdout:
+        def __init__(self, original, log_queue):
+            self.original = original
+            self.queue = log_queue
+
+        def write(self, s):
+            self.original.write(s)
+            if s.strip():
+                self.queue.put(s)
+
+        def flush(self):
+            self.original.flush()
+
     # ---- 单篇生成逻辑（可被并发调用）----
     def _process_single(idx: int, single_note: str) -> dict:
         state = None
@@ -640,6 +657,59 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
             for future in futures:
                 res = future.result()
                 results[res["idx"] - 1] = res
+    elif len(notes_list) == 1:
+        # 单篇：使用线程捕获实时日志
+        log_queue = queue.Queue()
+
+        def _run_single():
+            old_stdout = sys.stdout
+            sys.stdout = _QueueStdout(old_stdout, log_queue)
+            try:
+                return _process_single(1, notes_list[0])
+            finally:
+                sys.stdout = old_stdout
+
+        result_holder = {}
+        def thread_target():
+            result_holder["result"] = _run_single()
+
+        thread = threading.Thread(target=thread_target)
+        thread.start()
+
+        log_buffer = []
+        last_yield_time = 0
+        while thread.is_alive():
+            try:
+                while True:
+                    s = log_queue.get(timeout=0.1)
+                    log_buffer.append(s)
+            except queue.Empty:
+                pass
+
+            now = time.time()
+            if log_buffer and now - last_yield_time >= 0.5:
+                logs = "".join(log_buffer)
+                status = f"⏳ 正在生成...\n{logs}"
+                yield "", "", "", "", "", status, history
+                last_yield_time = now
+
+        thread.join()
+
+        # 读取剩余日志（竞态条件修复）
+        while True:
+            try:
+                s = log_queue.get_nowait()
+                log_buffer.append(s)
+            except queue.Empty:
+                break
+
+        if log_buffer:
+            logs = "".join(log_buffer)
+            status = f"⏳ 正在生成...\n{logs}"
+            yield "", "", "", "", "", status, history
+
+        res = result_holder.get("result")
+        results = [res]
     else:
         results = []
         for idx, single_note in enumerate(notes_list, 1):
@@ -717,6 +787,21 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
         status_parts.append(f"LLM调用:{total_llm_calls}次")
     if total_duration:
         status_parts.append(f"耗时:{total_duration:.1f}s")
+
+    # 评分信息（单篇时显示详细评分）
+    if len(notes_list) == 1 and orchestrator_states and orchestrator_states[0]:
+        st = orchestrator_states[0]
+        if st.edit_history:
+            if st.metadata.get("human_review_needed"):
+                best_idx = max(range(len(st.edit_history)), key=lambda i: st.edit_history[i].overall)
+                best_v = st.edit_history[best_idx]
+                status_parts.append(f"评分:{best_v.overall}/100 (第{best_idx+1}轮最佳)")
+            else:
+                last_v = st.edit_history[-1]
+                status_parts.append(f"评分:{last_v.overall}/100")
+                if len(st.edit_history) > 1:
+                    status_parts.append(f"修改{len(st.edit_history)-1}次后通过")
+
     if human_review_count:
         status_parts.append(f"⚠️{human_review_count}篇3次编辑未达标，取最佳稿")
     if token_exceeded_count:
@@ -727,8 +812,8 @@ def generate_content(note_text, note_file, platforms, enable_research, search_en
         st = orchestrator_states[0]
         if st.edit_history:
             last_v = st.edit_history[-1]
-            if last_v.suggestions and not last_v.passed:
-                edit_notes = chr(10) + "编辑建议:" + chr(10) + chr(10).join(f"  • {s}" for s in last_v.suggestions[:3])
+            if not last_v.passed and last_v.suggestions:
+                edit_notes = "\n编辑建议:\n" + "\n".join(f"  • {s}" for s in last_v.suggestions[:3])
 
     status = " | ".join(status_parts) + edit_notes
     if sensitive_check and sensitive_check["has_sensitive"]:

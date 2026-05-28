@@ -15,7 +15,10 @@ import os
 import sys
 import json
 import logging
+import queue
 import re
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +72,66 @@ PLATFORM_LABELS = {
     "xiaohongshu": "小红书",
     "douyin": "抖音",
 }
+
+PROGRESS_ICONS = {
+    "done": "✅",
+    "running": "🔄",
+    "warning": "⚠️",
+    "pending": "○",
+}
+
+
+def _format_progress_message(events: list) -> str:
+    """把执行事件渲染成聊天里的进度消息。"""
+    if not events:
+        return "🔄 **正在处理...**"
+
+    lines = ["🔄 **正在生成内容...**", ""]
+    for event in events:
+        icon = PROGRESS_ICONS.get(event.get("status", "pending"), "○")
+        title = event.get("title") or event.get("step", "执行步骤")
+        step_index = event.get("step_index")
+        total_steps = event.get("total_steps")
+        prefix = f"Step {step_index}/{total_steps} · " if step_index and total_steps else ""
+        detail = event.get("detail", "")
+        lines.append(f"{icon} {prefix}{title}")
+        if detail:
+            lines.append(f"   {detail}")
+    return "\n".join(lines)
+
+
+def _merge_progress_event(events: list, event: dict) -> list:
+    """同一个 step 更新状态，不同 step 追加到末尾。"""
+    step = event.get("step")
+    merged = list(events)
+    for idx, item in enumerate(merged):
+        if item.get("step") == step:
+            merged[idx] = {**item, **event}
+            return merged
+    merged.append(event)
+    return merged
+
+
+def _result_to_response(result: dict) -> tuple[str, str]:
+    """把 Agent 结果转换为聊天文本和公众号文件路径。"""
+    gzh_path = ""
+    if result["type"] == "content":
+        response = result["content"]
+        if result.get("files"):
+            response += "\n\n📁 **生成文件：**\n"
+            for f in result["files"]:
+                response += f"- {f}\n"
+            for f in result["files"]:
+                if "gongzhonghao" in f:
+                    gzh_path = f
+                    break
+    else:
+        response = result["content"]
+    return response, gzh_path
+
+
+def _copy_chat_history(chat_history: list) -> list:
+    return [dict(item) for item in chat_history]
 
 
 def _detect_requested_platforms(message: str) -> list:
@@ -320,6 +383,52 @@ class ChatAgent:
                 "type": "text",
                 "content": "我不太理解你的需求。你可以说：\n- '帮我写一篇关于XXX的公众号文章'\n- '生成小红书笔记：程序员健身指南'\n- '把这篇笔记改写成抖音文案'",
             }
+
+    def process_message_stream(self, user_message: str):
+        """处理用户消息，并产出可用于 UI 的进度事件。"""
+        logger.info(f"用户消息: {user_message}")
+
+        yield {
+            "type": "progress",
+            "event": {
+                "step": "analyze-intent",
+                "title": "分析需求",
+                "status": "running",
+                "detail": "正在识别主题、平台和写作要求",
+            },
+        }
+        intent = self._analyze_intent(user_message)
+        logger.info(f"意图分析: {intent}")
+
+        if intent["type"] == "generate":
+            labels = "、".join(PLATFORM_LABELS.get(p, p) for p in intent["platforms"])
+            yield {
+                "type": "progress",
+                "event": {
+                    "step": "analyze-intent",
+                    "title": "分析需求",
+                    "status": "done",
+                    "detail": f"已识别目标平台：{labels}",
+                },
+            }
+            yield from self._handle_generate_stream(intent, user_message)
+            return
+
+        if intent["type"] == "help":
+            yield {"type": "result", "result": self._handle_help()}
+            return
+
+        if intent["type"] == "status":
+            yield {"type": "result", "result": self._handle_status()}
+            return
+
+        yield {
+            "type": "result",
+            "result": {
+                "type": "text",
+                "content": "我不太理解你的需求。你可以说：\n- '帮我写一篇关于XXX的公众号文章'\n- '生成小红书笔记：程序员健身指南'\n- '把这篇笔记改写成抖音文案'",
+            },
+        }
     
     def _analyze_intent(self, message: str) -> dict:
         """分析用户意图"""
@@ -419,6 +528,165 @@ class ChatAgent:
                 "type": "error",
                 "content": f"生成失败: {str(e)}",
             }
+
+    def _handle_generate_stream(self, intent: dict, original_message: str):
+        """处理生成请求，并在关键阶段产出进度事件。"""
+        platforms = intent["platforms"]
+        topic = intent["topic"] or original_message
+        has_source_material = intent.get("has_source_material", False)
+        if not topic or len(topic) < 5:
+            topic = original_message
+
+        try:
+            if has_source_material:
+                raw_notes = _build_generation_notes(topic, "", intent)
+                yield {
+                    "type": "progress",
+                    "event": {
+                        "step": "prepare-notes",
+                        "title": "整理输入素材",
+                        "status": "done",
+                        "detail": "已使用你提供的笔记内容，不额外搜索覆盖主题",
+                    },
+                }
+            else:
+                yield {
+                    "type": "progress",
+                    "event": {
+                        "step": "search-topic",
+                        "title": "搜索相关资料",
+                        "status": "running",
+                        "detail": "正在搜索背景资料",
+                    },
+                }
+                search_result = execute_tool("search", query=topic[:200])
+                research_report = search_result.data if search_result.success else ""
+                yield {
+                    "type": "progress",
+                    "event": {
+                        "step": "search-topic",
+                        "title": "搜索相关资料",
+                        "status": "done" if search_result.success else "warning",
+                        "detail": f"搜索完成（{len(research_report)} 字）" if search_result.success else f"搜索失败，继续使用主题生成：{search_result.error}",
+                    },
+                }
+                raw_notes = _build_generation_notes(topic, research_report, intent)
+
+            yield {
+                "type": "progress",
+                "event": {
+                    "step": "select-strategy",
+                    "title": "选择生成策略",
+                    "status": "running",
+                    "detail": "正在判断需要哪些工具和步骤",
+                },
+            }
+            strategy = self.selector.select(raw_notes)
+            yield {
+                "type": "progress",
+                "event": {
+                    "step": "select-strategy",
+                    "title": "选择生成策略",
+                    "status": "done",
+                    "detail": f"使用策略：{strategy.name}",
+                },
+            }
+
+            progress_queue = queue.Queue()
+            result_holder = {}
+
+            def _on_progress(event: dict):
+                progress_queue.put(event)
+
+            def _run_plan():
+                try:
+                    result_holder["result"] = self.planner.plan_and_execute(
+                        raw_notes,
+                        platforms,
+                        strategy,
+                        progress_callback=_on_progress,
+                    )
+                except Exception as exc:
+                    result_holder["error"] = exc
+
+            thread = threading.Thread(target=_run_plan)
+            thread.start()
+            while thread.is_alive():
+                try:
+                    while True:
+                        yield {"type": "progress", "event": progress_queue.get_nowait()}
+                except queue.Empty:
+                    pass
+                time.sleep(0.1)
+            thread.join()
+            try:
+                while True:
+                    yield {"type": "progress", "event": progress_queue.get_nowait()}
+            except queue.Empty:
+                pass
+
+            if result_holder.get("error"):
+                raise result_holder["error"]
+
+            result = result_holder.get("result", {})
+            content = result.get("content")
+            if not content:
+                yield {"type": "result", "result": {"type": "error", "content": "生成失败，请重试"}}
+                return
+
+            yield {
+                "type": "progress",
+                "event": {
+                    "step": "save-files",
+                    "title": "保存生成文件",
+                    "status": "running",
+                    "detail": "正在保存 Markdown 文件",
+                },
+            }
+
+            output_text = f"✅ 已生成 {len(platforms)} 个平台的内容\n\n"
+            output_text += f"📋 使用策略: {strategy.name}\n"
+            output_text += f"📊 评分: {result.get('verdict', {}).overall if result.get('verdict') else 'N/A'}/100\n\n"
+
+            files = []
+            output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for platform in platforms:
+                text = getattr(content, platform, "")
+                if text:
+                    output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
+                    file_path = output_dir / f"{platform}.md"
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    files.append(str(file_path))
+
+            yield {
+                "type": "progress",
+                "event": {
+                    "step": "save-files",
+                    "title": "保存生成文件",
+                    "status": "done",
+                    "detail": f"已保存 {len(files)} 个文件",
+                },
+            }
+            yield {
+                "type": "result",
+                "result": {
+                    "type": "content",
+                    "content": output_text,
+                    "platforms": platforms,
+                    "files": files,
+                },
+            }
+        except Exception as e:
+            logger.error(f"生成失败: {e}", exc_info=True)
+            yield {
+                "type": "result",
+                "result": {
+                    "type": "error",
+                    "content": f"生成失败: {str(e)}",
+                },
+            }
     
     def _handle_help(self) -> dict:
         """处理帮助请求"""
@@ -476,55 +744,67 @@ class ChatAgent:
 
 # ==================== Gradio 界面 ====================
 
+def _respond_stream(agent, message, chat_history, note_file=None):
+    """Gradio 流式响应：先显示进度，再替换为最终结果。"""
+    display_message = message
+    if note_file:
+        note_path = _uploaded_file_path(note_file)
+        if note_path:
+            display_message = f"{message}\n\n📎 已上传笔记：{note_path.name}"
+
+    chat_history = list(chat_history)
+    chat_history.append({"role": "user", "content": display_message})
+
+    try:
+        process_message = (
+            _merge_uploaded_note_with_message(message, note_file)
+            if note_file
+            else message
+        )
+    except Exception as e:
+        chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
+        yield "", _copy_chat_history(chat_history), ""
+        return
+
+    progress_events = []
+    progress_index = None
+    gzh_path = ""
+
+    for payload in agent.process_message_stream(process_message):
+        if payload.get("type") == "progress":
+            progress_events = _merge_progress_event(progress_events, payload["event"])
+            progress_content = _format_progress_message(progress_events)
+            if progress_index is None:
+                chat_history.append({"role": "assistant", "content": progress_content})
+                progress_index = len(chat_history) - 1
+            else:
+                chat_history[progress_index]["content"] = progress_content
+            yield "", _copy_chat_history(chat_history), gzh_path
+            continue
+
+        if payload.get("type") == "result":
+            response, gzh_path = _result_to_response(payload["result"])
+            if progress_index is None:
+                chat_history.append({"role": "assistant", "content": response})
+            else:
+                chat_history[progress_index]["content"] = response
+            yield "", _copy_chat_history(chat_history), gzh_path
+            return
+
+    if progress_index is not None:
+        chat_history[progress_index]["content"] = "⚠️ 生成流程没有返回结果，请重试。"
+    else:
+        chat_history.append({"role": "assistant", "content": "⚠️ 生成流程没有返回结果，请重试。"})
+    yield "", _copy_chat_history(chat_history), gzh_path
+
+
 def create_chat_ui():
     """创建聊天界面"""
     agent = ChatAgent()
 
     def respond(message, chat_history, note_file=None):
         """处理用户消息"""
-        display_message = message
-        if note_file:
-            note_path = _uploaded_file_path(note_file)
-            if note_path:
-                display_message = f"{message}\n\n📎 已上传笔记：{note_path.name}"
-
-        # 添加用户消息
-        chat_history.append({"role": "user", "content": display_message})
-
-        try:
-            process_message = (
-                _merge_uploaded_note_with_message(message, note_file)
-                if note_file
-                else message
-            )
-        except Exception as e:
-            chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
-            return "", chat_history, ""
-        
-        # 处理消息
-        result = agent.process_message(process_message)
-        
-        # 构建响应
-        gzh_path = ""
-        if result["type"] == "content":
-            # 有生成内容
-            response = result["content"]
-            if result.get("files"):
-                response += "\n\n📁 **生成文件：**\n"
-                for f in result["files"]:
-                    response += f"- {f}\n"
-                # 提取公众号文件路径
-                for f in result["files"]:
-                    if "gongzhonghao" in f:
-                        gzh_path = f
-                        break
-        else:
-            response = result["content"]
-        
-        # 添加助手消息
-        chat_history.append({"role": "assistant", "content": response})
-        
-        return "", chat_history, gzh_path
+        yield from _respond_stream(agent, message, chat_history, note_file)
     
     def clear_history():
         """清空历史"""
@@ -656,13 +936,13 @@ def create_chat_ui():
         
         # 快捷按钮事件
         def quick_gzh():
-            return respond("帮我写一篇技术文章的公众号版本", [])
+            yield from _respond_stream(agent, "帮我写一篇技术文章的公众号版本", [], None)
         
         def quick_xhs():
-            return respond("生成小红书笔记", [])
+            yield from _respond_stream(agent, "生成小红书笔记", [], None)
         
         def quick_dy():
-            return respond("生成抖音口播脚本", [])
+            yield from _respond_stream(agent, "生成抖音口播脚本", [], None)
         
         btn_gzh.click(
             quick_gzh,

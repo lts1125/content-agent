@@ -22,6 +22,47 @@ class ChatUiConfigTest(unittest.TestCase):
         self.assertEqual([], missing)
 
 
+class ChatProgressTest(unittest.TestCase):
+    def test_progress_message_marks_done_running_and_pending_steps(self):
+        message = chat_ui._format_progress_message([
+            {"step": "analyze", "title": "分析需求", "status": "done", "detail": "已识别目标平台：公众号"},
+            {"step": "generate", "title": "生成内容", "status": "running", "detail": "正在生成公众号文章"},
+            {"step": "evaluate", "title": "质量评估", "status": "pending", "detail": ""},
+        ])
+
+        self.assertIn("✅ 分析需求", message)
+        self.assertIn("🔄 生成内容", message)
+        self.assertIn("○ 质量评估", message)
+        self.assertIn("已识别目标平台：公众号", message)
+
+    def test_respond_stream_yields_progress_before_final_response(self):
+        class FakeAgent:
+            def process_message_stream(self, _message):
+                yield {
+                    "type": "progress",
+                    "event": {
+                        "step": "analyze",
+                        "title": "分析需求",
+                        "status": "running",
+                        "detail": "正在识别需求",
+                    },
+                }
+                yield {
+                    "type": "result",
+                    "result": {"type": "text", "content": "生成完成"},
+                }
+
+        updates = list(chat_ui._respond_stream(FakeAgent(), "帮我写公众号文章", [], None))
+
+        self.assertGreaterEqual(len(updates), 2)
+        first_history = updates[0][1]
+        final_history = updates[-1][1]
+        self.assertEqual("user", first_history[0]["role"])
+        self.assertEqual("assistant", first_history[1]["role"])
+        self.assertIn("🔄 分析需求", first_history[1]["content"])
+        self.assertEqual("生成完成", final_history[-1]["content"])
+
+
 class ChatIntentTest(unittest.TestCase):
     def test_tail_instruction_wins_over_body_platform_mentions(self):
         message = """我为什么要做一个 Content Agent

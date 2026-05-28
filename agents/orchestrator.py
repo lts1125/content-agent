@@ -132,6 +132,7 @@ class Orchestrator:
 
         # ---- 快速模式：只出初稿，跳过 Editor ----
         if inp.skip_edit:
+            print(f"\n⚡ 快速模式：跳过编辑优化，直接生成...")
             draft = self.writer_agent.run(
                 raw_notes,
                 platforms=inp.platforms,
@@ -142,11 +143,15 @@ class Orchestrator:
             state.final_output = draft
             state.status = "done"
             state.metadata["llm_calls"] = 1
+            print(f"   ✅ 初稿生成完成")
             return state
+
+        print(f"\n📝 开始生成-编辑循环（最多 {MAX_EDIT_LOOPS} 轮）")
 
         for attempt in range(1, MAX_EDIT_LOOPS + 1):
             # ---- Writer ----
             if attempt == 1:
+                print(f"\n✍️  [第 {attempt} 轮] Writer 生成初稿...")
                 draft = self.writer_agent.run(
                     raw_notes,
                     platforms=inp.platforms,
@@ -154,6 +159,7 @@ class Orchestrator:
                     concurrent=inp.concurrent_mode,
                 )
             else:
+                print(f"\n✍️  [第 {attempt} 轮] Writer 根据反馈修改...")
                 last_verdict = state.edit_history[-1]
                 draft = self.writer_agent.refine(
                     prev_draft=state.drafts[-1],
@@ -164,9 +170,11 @@ class Orchestrator:
                 )
             state.drafts.append(draft)
             llm_calls += 1
+            print(f"   ✅ 内容生成完成")
 
             # ---- Editor ----
             state.status = "editing"
+            print(f"\n🔍 [第 {attempt} 轮] Editor 评估内容质量...")
             verdict = self.editor_agent.run(
                 draft.xiaohongshu,
                 draft.gongzhonghao,
@@ -175,9 +183,11 @@ class Orchestrator:
             )
             state.edit_history.append(verdict)
             llm_calls += 1
+            print(f"   评分: {verdict.overall}/100 | verdict: {'通过' if verdict.passed else '需修改'}")
 
             # ---- 通过 or 终止 ----
             if verdict.passed:
+                print(f"   ✅ 评估通过！最终评分: {verdict.overall}/100")
                 state.final_output = draft
                 state.status = "done"
                 state.metadata["llm_calls"] = llm_calls
@@ -186,6 +196,8 @@ class Orchestrator:
             if attempt >= MAX_EDIT_LOOPS:
                 # 3 次不过，取最佳稿（overall 最高的一次）
                 best_idx = self._pick_best_draft(state)
+                best_score = state.edit_history[best_idx].overall
+                print(f"   ⚠️ 已达最大修改次数，取第 {best_idx + 1} 轮最佳稿（评分: {best_score}/100）")
                 state.final_output = state.drafts[best_idx]
                 state.status = "done"
                 state.metadata["llm_calls"] = llm_calls
@@ -195,11 +207,16 @@ class Orchestrator:
             # Token 预算熔断
             if llm_calls >= MAX_LLM_CALLS:
                 best_idx = self._pick_best_draft(state)
+                best_score = state.edit_history[best_idx].overall
+                print(f"   ⚠️ Token 预算超出，取第 {best_idx + 1} 轮最佳稿（评分: {best_score}/100）")
                 state.final_output = state.drafts[best_idx]
                 state.status = "done"
                 state.metadata["llm_calls"] = llm_calls
                 state.metadata["token_budget_exceeded"] = True
                 return state
+
+            if verdict.suggestions:
+                print(f"   💡 建议: {verdict.suggestions[0][:80]}...")
 
         return state
 
