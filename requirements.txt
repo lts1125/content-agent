@@ -1,5 +1,6 @@
 pydantic-ai
 pydantic
+gradio
 duckduckgo-search
 python-dotenv
 docx

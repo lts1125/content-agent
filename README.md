@@ -165,7 +165,38 @@ kuaifa config
 
 > [kuaifa](https://github.com/shirenchuang/kuaifa) 是外部 Node.js 开源工具，不会被 PyInstaller 或 Python 依赖自动打包。目标机器需要单独安装。
 
-### 6. 传统 CLI 运行方式
+### 6. Docker 部署聊天 UI（可选）
+
+服务器上可以用 Docker 先跑 `chat_ui.py`：
+
+```bash
+cp .env.example .env
+# 编辑 .env，填入模型 API Key
+
+docker compose up -d --build
+```
+
+访问：
+
+```text
+http://服务器IP:7861
+```
+
+默认会持久化这些目录：
+
+```text
+./output          -> 生成内容
+./data            -> 本地数据库/运行数据
+./.content_agent  -> 日志、定时任务、内容日历等用户配置
+```
+
+注意：
+
+- Docker 镜像默认只安装 Python 依赖，用于内容生成和聊天 UI。
+- RAG 首次使用可能下载 embedding 模型，服务器需要能访问模型源，或提前挂载缓存。
+- 公众号草稿箱发布依赖 Node.js 和 kuaifa CLI，当前 Dockerfile 未内置；如需在容器内发布公众号，可后续扩展镜像。
+
+### 7. 传统 CLI 运行方式
 
 ```bash
 # 默认演示
@@ -178,7 +209,7 @@ python main.py -i notes/my_note.md
 python main.py --react --note-file ~/notes/mcp.md --platforms gongzhonghao,xiaohongshu,douyin
 ```
 
-### 7. 传统 Web UI（可选）
+### 8. 传统 Web UI（可选）
 
 项目仍保留较完整的 Gradio 管理界面：
 
