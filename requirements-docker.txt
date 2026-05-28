@@ -1,4 +1,4 @@
-pydantic-ai==0.8.1
+pydantic-ai-slim[openai]==0.8.1
 pydantic
 gradio==4.44.1
 ddgs
