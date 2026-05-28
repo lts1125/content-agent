@@ -71,10 +71,11 @@ def _patch_gradio_api_info_for_compatibility():
         try:
             return original_get_api_info(self, *args, **kwargs)
         except TypeError as exc:
-            if "argument of type 'bool' is not iterable" not in str(exc):
-                raise
-            logger.warning("Gradio API info generation failed; using empty API info.", exc_info=True)
-            return {}
+            msg = str(exc)
+            if "argument of type 'bool' is not iterable" in msg or "unhashable type: 'dict'" in msg:
+                logger.warning("Gradio API info generation failed; using empty API info.", exc_info=True)
+                return {}
+            raise
 
     gr.Blocks.get_api_info = safe_get_api_info
     gr.Blocks._content_agent_api_info_patched = True
@@ -937,9 +938,9 @@ def create_chat_ui():
             )
             with gr.Column(scale=1):
                 with gr.Row():
-                    download_gzh = gr.DownloadButton("⬇️ 公众号", value=None, visible=False, size="sm")
-                    download_xhs = gr.DownloadButton("⬇️ 小红书", value=None, visible=False, size="sm")
-                    download_dy = gr.DownloadButton("⬇️ 抖音", value=None, visible=False, size="sm")
+                    download_gzh = gr.DownloadButton("⬇️ 公众号", visible=False, size="sm")
+                    download_xhs = gr.DownloadButton("⬇️ 小红书", visible=False, size="sm")
+                    download_dy = gr.DownloadButton("⬇️ 抖音", visible=False, size="sm")
         
         # 快捷按钮
         with gr.Row():
@@ -1067,4 +1068,5 @@ if __name__ == "__main__":
         server_port=server_port,
         share=False,
         show_error=True,
+        quiet=True,
     )
