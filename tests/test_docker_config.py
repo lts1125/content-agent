@@ -42,6 +42,7 @@ class DockerConfigTest(unittest.TestCase):
         docker_reqs = (ROOT / "requirements-docker.txt").read_text(encoding="utf-8")
 
         self.assertIn("gradio==4.44.1", docker_reqs)
+        self.assertIn("huggingface-hub==0.36.2", docker_reqs)
         self.assertIn("pydantic-ai-slim[openai]==0.8.1", docker_reqs)
         self.assertIn("ddgs", docker_reqs)
         self.assertNotIn("duckduckgo-search", docker_reqs)

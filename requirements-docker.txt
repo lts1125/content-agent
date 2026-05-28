@@ -1,6 +1,7 @@
 pydantic-ai-slim[openai]==0.8.1
 pydantic
 gradio==4.44.1
+huggingface-hub==0.36.2
 ddgs
 python-dotenv
 docx
