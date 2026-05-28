@@ -41,7 +41,7 @@ class DockerConfigTest(unittest.TestCase):
     def test_docker_requirements_excludes_rag_heavy_dependencies(self):
         docker_reqs = (ROOT / "requirements-docker.txt").read_text(encoding="utf-8")
 
-        self.assertIn("gradio>=5,<6", docker_reqs)
+        self.assertIn("gradio==4.44.1", docker_reqs)
         self.assertIn("pydantic-ai", docker_reqs)
         self.assertNotIn("sentence-transformers", docker_reqs)
         self.assertNotIn("chromadb", docker_reqs)
