@@ -61,6 +61,7 @@ class ReActAgent:
         self.max_steps = max_steps
         self.model, _ = ModelConfig.from_env()
         self.tools_prompt = "\n".join(list_tools())
+        self.writer_agent = None
 
         self._agent = Agent(
             self.model,
@@ -146,7 +147,7 @@ class ReActAgent:
         for attempt in range(3):  # 最多修改3次
             # 评估
             print(f"   🔎 ReAct Step 3/3: 第 {attempt + 1} 次评估内容质量...", flush=True)
-            eval_step, score = self._evaluate_step(current_content, platforms, attempt + 1)
+            eval_step, score, verdict = self._evaluate_step(current_content, platforms, attempt + 1)
             steps.append(eval_step)
 
             if score >= 80:
@@ -174,8 +175,17 @@ class ReActAgent:
                     if result.success and isinstance(result.data, WriterOutput):
                         current_content = result.data
                 elif "refine" in modify_step.action.lower():
-                    # 精细化修改（可以扩展）
-                    pass
+                    # 精细化修改
+                    if verdict is not None:
+                        print("   ✍️ ReAct: 精细化修改最弱平台...", flush=True)
+                        if self.writer_agent is None:
+                            from agents.writer_agent import WriterAgent
+                            self.writer_agent = WriterAgent()
+                        current_content = self.writer_agent.refine(
+                            current_content, verdict, raw_notes, platforms
+                        )
+                    else:
+                        print("   ⚠️ ReAct: 无评估结果，跳过精细化修改")
 
         # 超过最大修改次数，返回最后一次结果
         return ReActOutput(
@@ -186,7 +196,7 @@ class ReActAgent:
         )
 
     def _evaluate_step(self, content: WriterOutput, platforms: List[str], attempt: int):
-        """执行评估步骤，返回 (step, score)
+        """执行评估步骤，返回 (step, score, verdict)
         只评估生成的平台，避免空内容拉低分数
         """
         thought = f"第{attempt}次评估：检查 {', '.join(platforms)} 平台内容的质量"
@@ -207,16 +217,18 @@ class ReActAgent:
         else:
             result = execute_tool("evaluate", **eval_content)
 
+        verdict = None
         if result.success and hasattr(result.data, 'overall'):
             score = result.data.overall
             step.observation = f"评分: {score}/100"
             if hasattr(result.data, 'suggestions'):
                 step.observation += f"\n建议: {', '.join(result.data.suggestions[:3])}"
+            verdict = result.data
         else:
             step.observation = f"评估失败: {result.error if hasattr(result, 'error') else '未知错误'}"
             score = 0
 
-        return step, score
+        return step, score, verdict
 
     def _modify_step(self, content: WriterOutput, eval_observation: str, platforms: List[str], context: str) -> ReActStep:
         """执行反思修改步骤"""

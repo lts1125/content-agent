@@ -44,7 +44,7 @@ from content_agent.rag.indexer import VaultIndexer
 - 统一 `RAGTool` 到 `content_agent.rag.indexer.VaultIndexer`。
 - 给 `rag` 工具加最小单测，验证空索引、正常检索、异常降级。
 
-### 2. ReAct 修改闭环还不完整
+### 2. ReAct 修改闭环还不完整 【已解决】
 
 位置：`agents/react_agent.py`
 
