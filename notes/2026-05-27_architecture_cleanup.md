@@ -91,7 +91,7 @@ from content_agent.rag.indexer import VaultIndexer
 - 所有 Agent、工具、旧核心都从统一入口读取模型。
 - 将旧配置保留为兼容导入，逐步迁移。
 
-### 4. 旧链路和新链路并存，主路径不清晰
+### 4. 旧链路和新链路并存，主路径不清晰 【已解决】
 
 位置：`main.py`
 

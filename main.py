@@ -28,13 +28,8 @@ from content_agent.quality_checker import QualityChecker
 from content_agent.research import research_notes, extract_keywords_with_llm
 
 # Phase 0: 新架构（Orchestrator + Multi-Agent）
-try:
-    from agents import Orchestrator, TaskInput
-    from agents.store import init_db, save_task
-    HAS_NEW_ARCH = True
-except Exception as e:
-    HAS_NEW_ARCH = False
-    _import_err = e
+from agents import Orchestrator, TaskInput
+from agents.store import init_db, save_task
 
 load_dotenv()
 
@@ -178,6 +173,9 @@ def process_single_note(
 ) -> dict:
     """
     处理单个笔记，返回处理结果
+
+    ⚠️ LEGACY: 旧架构链路，使用 ContentAgent + QualityChecker。
+    已被 Orchestrator 链路取代，不再主动维护，仅供回退。
 
     Returns:
         {"success": bool, "saved_files": list, "error": str|None}
@@ -1124,9 +1122,9 @@ def main():
         help="搜索引擎选择（默认: duckduckgo，无需 API key）"
     )
     parser.add_argument(
-        "--v2",
+        "--legacy",
         action="store_true",
-        help="使用新架构（Orchestrator + Multi-Agent）运行"
+        help="使用旧架构（ContentAgent + QualityChecker）运行，不再维护，仅供回退"
     )
 
     agent_group = parser.add_mutually_exclusive_group()
@@ -1194,12 +1192,11 @@ def main():
     args = parser.parse_args()
 
     # Phase 0: 初始化 SQLite
-    if HAS_NEW_ARCH:
-        try:
-            from agents.store import init_db
-            init_db()
-        except Exception as e:
-            print(f"⚠️ 数据库初始化失败: {e}")
+    try:
+        from agents.store import init_db
+        init_db()
+    except Exception as e:
+        print(f"⚠️ 数据库初始化失败: {e}")
 
     # ---- Agent Mode 处理 ----
     agent_args = [
@@ -1215,9 +1212,6 @@ def main():
         args.react, args.publish_file, args.autonomous,
     ]
     if any(agent_args):
-        if not HAS_NEW_ARCH:
-            print(f"❌ Agent 模式不可用: {_import_err}")
-            sys.exit(1)
         _handle_agent_mode(args)
         return
 
@@ -1247,14 +1241,9 @@ def main():
         print(f"   有效选项: {', '.join(sorted(VALID_PLATFORMS))}, all")
         sys.exit(1)
 
-    # 3. 初始化共享的 Agent 和 Checker
-    try:
-        agent = ContentAgent()
-    except ValueError as e:
-        print(f"❌ 配置错误: {e}")
-        sys.exit(1)
-
-    checker = QualityChecker(agent.model)
+    # 3. 初始化（默认延迟到使用时）
+    agent = None
+    checker = None
 
     # 4. 处理笔记
     base_output_dir = Path(args.output)
@@ -1296,20 +1285,29 @@ def main():
 
         print(f"\n📊 进度: {idx}/{len(note_files)}")
 
-        if args.v2 and HAS_NEW_ARCH:
-            result = process_single_note_v2(
+        if args.legacy:
+            # 旧架构（不再维护，仅供回退）
+            if agent is None:
+                try:
+                    agent = ContentAgent()
+                except ValueError as e:
+                    print(f"❌ 配置错误: {e}")
+                    sys.exit(1)
+                checker = QualityChecker(agent.model)
+            result = process_single_note(
                 note_path=note_path or Path("default"),
                 raw_notes=raw_notes,
+                agent=agent,
+                checker=checker,  # type: ignore[arg-type]
                 enabled_platforms=enabled_platforms,
                 args=args,
                 note_output_dir=note_output_dir,
             )
         else:
-            result = process_single_note(
+            # 默认走新架构（Orchestrator）
+            result = process_single_note_v2(
                 note_path=note_path or Path("default"),
                 raw_notes=raw_notes,
-                agent=agent,
-                checker=checker,
                 enabled_platforms=enabled_platforms,
                 args=args,
                 note_output_dir=note_output_dir,
