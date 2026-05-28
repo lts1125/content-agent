@@ -1,7 +1,10 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 import chat_ui
+from agents.writer_agent import WriterAgent
 
 
 class ChatUiConfigTest(unittest.TestCase):
@@ -56,6 +59,7 @@ class ChatIntentTest(unittest.TestCase):
         )
 
         self.assertEqual("小白", intent["writing_requirements"]["audience"])
+        self.assertEqual("popular_science", intent["writing_requirements"]["gongzhonghao_mode"])
         self.assertIn("通俗易懂", intent["writing_requirements"]["tone"])
         self.assertIn("程序员给朋友解释", intent["writing_requirements"]["style_reference"])
         self.assertIn("少用术语", intent["writing_requirements"]["avoid"])
@@ -72,8 +76,54 @@ class ChatIntentTest(unittest.TestCase):
 
         self.assertIn("## 写作要求", raw_notes)
         self.assertIn("目标读者：小白", raw_notes)
+        self.assertIn("公众号模式：通俗科普", raw_notes)
         self.assertIn("表达语气：通俗易懂", raw_notes)
         self.assertIn("风格参考：程序员给朋友解释", raw_notes)
+
+    def test_upload_file_content_is_merged_with_user_instruction(self):
+        with TemporaryDirectory() as tmp_dir:
+            note_path = Path(tmp_dir) / "mcp.md"
+            note_path.write_text("# MCP 学习笔记\n\nMCP 可以连接 AI 和外部工具。", encoding="utf-8")
+
+            merged = chat_ui._merge_uploaded_note_with_message(
+                "根据这篇笔记生成一篇公众号文章，面向普通人，通俗易懂",
+                str(note_path),
+            )
+
+        self.assertIn("# MCP 学习笔记", merged)
+        self.assertIn("MCP 可以连接 AI 和外部工具", merged)
+        self.assertIn("根据以上内容，根据这篇笔记生成一篇公众号文章", merged)
+        self.assertIn("面向普通人", merged)
+
+
+class GongzhonghaoPopularPromptTest(unittest.TestCase):
+    def _writer_without_model_init(self):
+        agent = WriterAgent.__new__(WriterAgent)
+        agent._load_style_profile = lambda platform: ""
+        return agent
+
+    def test_popular_science_prompt_uses_plain_language_rules(self):
+        agent = self._writer_without_model_init()
+
+        prompt = agent._build_draft_prompt(
+            "# MCP 协议\n\n## 写作要求\n\n- 目标读者：普通人\n- 公众号模式：通俗科普\n- 表达语气：通俗易懂",
+            ["gongzhonghao"],
+        )
+
+        self.assertIn("【公众号文章：通俗科普模式】", prompt)
+        self.assertIn("不假设读者懂编程", prompt)
+        self.assertIn("所有技术术语都必须先用一句人话解释", prompt)
+        self.assertIn("除非原始笔记明确要求，不要把代码块作为主体内容", prompt)
+        self.assertNotIn("- 包含具体的命令行代码块", prompt)
+
+    def test_default_gongzhonghao_prompt_keeps_professional_rules(self):
+        agent = self._writer_without_model_init()
+
+        prompt = agent._build_draft_prompt("# MCP 协议\n\n技术学习笔记", ["gongzhonghao"])
+
+        self.assertIn("【公众号文章】", prompt)
+        self.assertIn("- 包含具体的命令行代码块", prompt)
+        self.assertNotIn("【公众号文章：通俗科普模式】", prompt)
 
 
 if __name__ == "__main__":

@@ -307,9 +307,47 @@ class WriterAgent:
             pass
         return ""
 
+    @staticmethod
+    def _use_popular_gongzhonghao_prompt(raw_notes: str) -> bool:
+        """判断公众号是否应使用通俗科普模式。"""
+        markers = [
+            "公众号模式：通俗科普",
+            "目标读者：普通人",
+            "目标读者：小白",
+            "目标读者：零基础",
+            "目标读者：非技术",
+            "通俗易懂",
+            "大白话",
+            "少用术语",
+            "不要太技术",
+            "别太技术",
+        ]
+        return any(marker in raw_notes for marker in markers)
+
     def _build_draft_prompt(self, raw_notes: str, platforms: List[str]) -> str:
         """构建初稿 prompt，包含风格画像"""
         # 根据平台列表构建平台特定 prompt
+        gongzhonghao_prompt = """【公众号文章】
+- 标题正式，可带副标题
+- 开头用导言引入，讲背景和动机
+- 正文分大章节，用## 标题分隔
+- 每个步骤详细展开：有原理解释、代码示例、实际场景
+- 包含具体的命令行代码块
+- 有"总结"和"下一步"部分
+- 全文1500-2500字，信息密度高"""
+
+        if "gongzhonghao" in platforms and self._use_popular_gongzhonghao_prompt(raw_notes):
+            gongzhonghao_prompt = """【公众号文章：通俗科普模式】
+- 面向普通读者，不假设读者懂编程、协议、框架或行业术语
+- 开头先讲一个生活化场景或具体问题，让读者知道"这和我有什么关系"
+- 所有技术术语都必须先用一句人话解释，再给一个生活类比
+- 少用连续抽象名词；每段尽量只讲一个意思，段落控制在 2-4 行
+- 正文分大章节，用## 标题分隔；标题要像普通人会问的问题
+- 除非原始笔记明确要求，不要把代码块作为主体内容；必要代码放到"进阶补充"小节
+- 每个核心概念后补一句"换句话说"或"你可以理解为"
+- 结尾总结它对普通人、职场人或内容创作者的实际影响
+- 全文1200-2000字，信息清楚但不过度堆细节"""
+
         platform_prompts = {
             "xiaohongshu": """【小红书笔记】
 - 标题吸睛，带emoji和数字
@@ -319,14 +357,7 @@ class WriterAgent:
 - 结尾金句总结 + 互动问句
 - 添加3-5个话题标签（#xxx 格式）
 - 全文300-600字""",
-            "gongzhonghao": """【公众号文章】
-- 标题正式，可带副标题
-- 开头用导言引入，讲背景和动机
-- 正文分大章节，用## 标题分隔
-- 每个步骤详细展开：有原理解释、代码示例、实际场景
-- 包含具体的命令行代码块
-- 有"总结"和"下一步"部分
-- 全文1500-2500字，信息密度高""",
+            "gongzhonghao": gongzhonghao_prompt,
             "douyin": """【抖音口播脚本】
 - 开头前3秒必须有强钩子
 - 每句话不超过15个字，短句排比

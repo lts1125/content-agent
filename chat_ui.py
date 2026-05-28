@@ -136,6 +136,7 @@ def _extract_writing_requirements(message: str) -> dict:
         "tone": "",
         "style_reference": "",
         "avoid": [],
+        "gongzhonghao_mode": "",
     }
 
     audience_match = re.search(r"给(.{1,12}?)(介绍|讲|写|科普)", message)
@@ -159,6 +160,14 @@ def _extract_writing_requirements(message: str) -> dict:
     matched_tones = [kw for kw in tone_keywords if kw in message]
     if matched_tones:
         requirements["tone"] = "、".join(matched_tones)
+
+    popular_audience_keywords = ["普通人", "小白", "零基础", "非技术", "大众", "新手", "外行"]
+    popular_style_keywords = ["通俗易懂", "大白话", "科普", "接地气", "少用术语", "不要太技术", "别太技术"]
+    if (
+        any(kw in requirements.get("audience", "") for kw in popular_audience_keywords)
+        or any(kw in message for kw in popular_audience_keywords + popular_style_keywords)
+    ):
+        requirements["gongzhonghao_mode"] = "popular_science"
 
     style_match = re.search(r"像(.{2,30}?)(一样|那样|的风格|风格|类似|，|,|。|$)", message)
     if style_match:
@@ -208,6 +217,8 @@ def _format_writing_requirements(requirements: dict) -> str:
         lines.append(f"- 目标读者：{requirements['audience']}")
     if requirements.get("tone"):
         lines.append(f"- 表达语气：{requirements['tone']}")
+    if requirements.get("gongzhonghao_mode") == "popular_science":
+        lines.append("- 公众号模式：通俗科普")
     if requirements.get("style_reference"):
         lines.append(
             "- 风格参考："
@@ -235,6 +246,41 @@ def _build_generation_notes(topic: str, research_report: str, intent: dict) -> s
         parts.append(requirements_text)
 
     return "\n\n".join(part for part in parts if part)
+
+
+def _uploaded_file_path(uploaded_file) -> Path:
+    """兼容 Gradio filepath / file dict / tempfile object。"""
+    if uploaded_file is None:
+        return None
+    if isinstance(uploaded_file, (str, Path)):
+        return Path(uploaded_file)
+    if isinstance(uploaded_file, dict) and uploaded_file.get("path"):
+        return Path(uploaded_file["path"])
+    name = getattr(uploaded_file, "name", "")
+    if name:
+        return Path(name)
+    return None
+
+
+def _read_uploaded_note_file(uploaded_file) -> str:
+    """读取上传的 Markdown 或纯文本笔记。"""
+    path = _uploaded_file_path(uploaded_file)
+    if path is None:
+        return ""
+    suffix = path.suffix.lower()
+    if suffix not in (".md", ".txt"):
+        raise ValueError("仅支持上传 .md 或 .txt 笔记文件")
+    return path.read_text(encoding="utf-8")
+
+
+def _merge_uploaded_note_with_message(message: str, uploaded_file) -> str:
+    """把上传笔记作为素材，把输入框内容作为生成指令。"""
+    note_text = _read_uploaded_note_file(uploaded_file).strip()
+    instruction = (message or "").strip()
+    if not instruction:
+        instruction = "生成一篇公众号文章"
+    return f"{note_text}\n\n根据以上内容，{instruction}"
+
 
 class ChatAgent:
     """聊天 Agent，处理用户消息并执行内容生成"""
@@ -434,13 +480,29 @@ def create_chat_ui():
     """创建聊天界面"""
     agent = ChatAgent()
 
-    def respond(message, chat_history):
+    def respond(message, chat_history, note_file=None):
         """处理用户消息"""
+        display_message = message
+        if note_file:
+            note_path = _uploaded_file_path(note_file)
+            if note_path:
+                display_message = f"{message}\n\n📎 已上传笔记：{note_path.name}"
+
         # 添加用户消息
-        chat_history.append({"role": "user", "content": message})
+        chat_history.append({"role": "user", "content": display_message})
+
+        try:
+            process_message = (
+                _merge_uploaded_note_with_message(message, note_file)
+                if note_file
+                else message
+            )
+        except Exception as e:
+            chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
+            return "", chat_history, ""
         
         # 处理消息
-        result = agent.process_message(message)
+        result = agent.process_message(process_message)
         
         # 构建响应
         gzh_path = ""
@@ -542,6 +604,12 @@ def create_chat_ui():
                 show_label=False,
             )
             send_btn = gr.Button("发送", scale=1, variant="primary")
+
+        note_upload = gr.File(
+            label="上传笔记（.md / .txt，可选）",
+            file_types=[".md", ".txt"],
+            type="filepath",
+        )
         
         # 快捷按钮
         with gr.Row():
@@ -571,13 +639,13 @@ def create_chat_ui():
         # 事件绑定
         send_btn.click(
             respond,
-            inputs=[msg_input, chatbot],
+            inputs=[msg_input, chatbot, note_upload],
             outputs=[msg_input, chatbot, last_gzh_file]
         )
         
         msg_input.submit(
             respond,
-            inputs=[msg_input, chatbot],
+            inputs=[msg_input, chatbot, note_upload],
             outputs=[msg_input, chatbot, last_gzh_file]
         )
         
@@ -651,7 +719,11 @@ def create_chat_ui():
 # ==================== 启动 ====================
 
 if __name__ == "__main__":
+    server_name = os.getenv("GRADIO_SERVER_NAME", "127.0.0.1")
+    server_port = int(os.getenv("GRADIO_SERVER_PORT", "7861"))
+
     print("🚀 启动 Content Agent 聊天界面...")
+    print(f"🌐 访问地址：http://{server_name}:{server_port}")
     print("📖 使用说明：")
     print("   - 输入需求，Agent 会自动生成内容")
     print("   - 支持平台：公众号、小红书、抖音")
@@ -660,8 +732,8 @@ if __name__ == "__main__":
     
     demo = create_chat_ui()
     demo.launch(
-        server_name="0.0.0.0",
-        server_port=7861,
+        server_name=server_name,
+        server_port=server_port,
         share=False,
         show_error=True,
     )
