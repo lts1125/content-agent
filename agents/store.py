@@ -32,7 +32,7 @@ def _get_conn() -> sqlite3.Connection:
 def _get_schema_version() -> int:
     conn = _get_conn()
     try:
-        row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        row = conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
         return row["version"] if row else 1
     except sqlite3.OperationalError:
         return 1
@@ -83,6 +83,8 @@ def _set_schema_version(version: int):
         "INSERT INTO schema_version (version) VALUES (?) ON CONFLICT(version) DO UPDATE SET version=excluded.version",
         (version,),
     )
+    # 清理多行残留：只保留当前版本
+    conn.execute("DELETE FROM schema_version WHERE version != ?", (version,))
     conn.commit()
     conn.close()
 

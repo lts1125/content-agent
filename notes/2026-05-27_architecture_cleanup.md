@@ -112,7 +112,7 @@ from content_agent.rag.indexer import VaultIndexer
 - 旧链路移动或标记为 `legacy`，只作为历史演进材料保留。
 - `main.py` 只保留清晰 CLI 分派，不再承载过多业务逻辑。
 
-### 5. 数据库 schema version 设计不够稳
+### 5. 数据库 schema version 设计不够稳 【已解决】
 
 位置：`agents/store.py`
 
