@@ -43,6 +43,8 @@ class DockerConfigTest(unittest.TestCase):
 
         self.assertIn("gradio==4.44.1", docker_reqs)
         self.assertIn("pydantic-ai", docker_reqs)
+        self.assertIn("ddgs", docker_reqs)
+        self.assertNotIn("duckduckgo-search", docker_reqs)
         self.assertNotIn("sentence-transformers", docker_reqs)
         self.assertNotIn("chromadb", docker_reqs)
 
