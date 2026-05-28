@@ -261,38 +261,6 @@ class PublishTool(BaseTool):
             return ToolResult(success=False, data="", error=str(e))
 
 
-class RAGTool(BaseTool):
-    """RAG 工具 - 检索相关笔记"""
-    
-    def __init__(self):
-        super().__init__(
-            name="rag",
-            description="检索相关笔记。参数: query(查询内容), top_k(返回数量)"
-        )
-    
-    def execute(self, query: str, top_k: int = 3) -> ToolResult:
-        """执行检索"""
-        try:
-            # 使用项目内 RAG 模块的 VaultIndexer
-            from content_agent.rag.indexer import VaultIndexer
-            
-            indexer = VaultIndexer()
-            results = indexer.search(query, n_results=top_k)
-            
-            summaries = []
-            for r in results:
-                title = r.get("metadata", {}).get("title", "")
-                content = r.get("document", "")[:200]
-                summaries.append(f"[{title}] {content}...")
-            
-            return ToolResult(
-                success=True,
-                data="\n\n".join(summaries) if summaries else "未找到相关笔记",
-            )
-        except Exception as e:
-            return ToolResult(success=False, data="", error=str(e))
-
-
 class DataAnalysisTool(BaseTool):
     """数据分析工具 - 分析数据并生成洞察"""
     
@@ -426,7 +394,6 @@ TOOL_REGISTRY: Dict[str, BaseTool] = {
     "generate": GenerateTool(),
     "evaluate": EvaluateTool(),
     "publish": PublishTool(),
-    "rag": RAGTool(),
     "analyze": DataAnalysisTool(),
     "execute": CodeExecutionTool(),
 }
