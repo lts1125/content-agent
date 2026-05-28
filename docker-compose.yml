@@ -1,6 +1,10 @@
 services:
   content-agent:
-    build: .
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
+        USE_CHINA_APT_MIRROR: ${USE_CHINA_APT_MIRROR:-true}
     container_name: content-agent
     ports:
       - "7861:7861"
