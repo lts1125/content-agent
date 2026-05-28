@@ -4,6 +4,7 @@
 根据内容自动选择策略
 """
 
+import copy
 from typing import Optional
 
 from pydantic_ai import Agent
@@ -57,9 +58,10 @@ class StrategySelector:
         try:
             result = self._agent.run_sync(prompt)
             content_type = self._parse_type(result.output)
-            return STRATEGIES.get(content_type, STRATEGIES[ContentType.UNKNOWN])
+            strategy = STRATEGIES.get(content_type, STRATEGIES[ContentType.UNKNOWN])
+            return copy.deepcopy(strategy)
         except Exception:
-            return STRATEGIES[ContentType.UNKNOWN]
+            return copy.deepcopy(STRATEGIES[ContentType.UNKNOWN])
 
     def _parse_type(self, text: str) -> ContentType:
         """解析类型文本"""
