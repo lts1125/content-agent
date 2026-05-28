@@ -169,9 +169,9 @@ sys.path.insert(0, '/Users/lee/content-agent')
 - 在 CLI/应用入口统一处理项目根路径。
 - 工具层不应该知道本机绝对路径。
 
-### 7. `tools.py` 过重，工具注册和工具实现耦合
+### 7. `tools.py` 过重，工具注册和工具实现耦合 【已解决】
 
-位置：`agents/tools.py`
+位置：`agents/tools.py` → `agents/tools/`
 
 当前一个文件同时承担：
 
@@ -179,29 +179,27 @@ sys.path.insert(0, '/Users/lee/content-agent')
 - 搜索/浏览/读文件/生成/评估/发布/RAG/分析/代码执行所有工具实现
 - 工具注册表
 
-风险：
-
-- 文件继续变大后难以维护。
-- 工具测试不够聚焦。
-- 高风险工具（发布、代码执行）和低风险工具混在一起。
-
-建议拆分：
+已拆分：
 
 ```text
 agents/tools/
-  __init__.py
-  base.py
-  registry.py
-  search.py
-  browse.py
-  file_read.py
-  generate.py
-  evaluate.py
-  publish.py
-  rag.py
-  analysis.py
-  code_execution.py
+  __init__.py    -- 向后兼容导出
+  base.py        -- ToolResult + BaseTool
+  registry.py    -- 懒加载注册表 + get_tool/list_tools/execute_tool
+  search.py      -- SearchTool
+  browse.py      -- BrowseTool
+  file_read.py   -- FileReadTool
+  generate.py    -- GenerateTool
+  evaluate.py    -- EvaluateTool
+  publish.py     -- PublishTool
+  analysis.py    -- DataAnalysisTool
+  code_execution.py -- CodeExecutionTool
 ```
+
+关键改进：
+- `list_tools()` 不触发实例化，无侧效
+- `get_tool()` 第一次取用时懒加载，避免导入时触发 LLM 配置
+- `TOOL_REGISTRY` 保持向后兼容（指向实例缓存）
 
 ### 8. Agent 执行轨迹还不够产品化 【已解决】
 
