@@ -1,0 +1,11 @@
+pydantic-ai
+pydantic
+gradio
+duckduckgo-search
+python-dotenv
+docx
+python-docx
+watchdog
+apscheduler
+pyyaml
+numpy

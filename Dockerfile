@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+ARG REQUIREMENTS_FILE=requirements-docker.txt
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG USE_CHINA_APT_MIRROR=true
 
@@ -24,8 +25,8 @@ RUN if [ "$USE_CHINA_APT_MIRROR" = "true" ]; then \
        libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
+COPY requirements.txt requirements-docker.txt ./
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r ${REQUIREMENTS_FILE}
 
 COPY . .
 

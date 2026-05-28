@@ -192,7 +192,21 @@ http://服务器IP:7861
 
 注意：
 
-- Docker 镜像默认只安装 Python 依赖，用于内容生成和聊天 UI。
+- Docker 默认使用轻量依赖文件 `requirements-docker.txt`，用于内容生成和聊天 UI，不安装 `sentence-transformers` / `torch` / `chromadb` 等 RAG 重依赖。
+- 如果确实要在容器内启用完整 RAG，可改用完整依赖构建：
+
+```bash
+REQUIREMENTS_FILE=requirements.txt docker compose up -d --build
+```
+
+- 国内服务器默认使用阿里云 apt / pip 源；如需切回官方源：
+
+```bash
+USE_CHINA_APT_MIRROR=false \
+PIP_INDEX_URL=https://pypi.org/simple \
+docker compose build --no-cache
+```
+
 - RAG 首次使用可能下载 embedding 模型，服务器需要能访问模型源，或提前挂载缓存。
 - 公众号草稿箱发布依赖 Node.js 和 kuaifa CLI，当前 Dockerfile 未内置；如需在容器内发布公众号，可后续扩展镜像。
 

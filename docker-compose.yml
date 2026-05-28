@@ -3,6 +3,7 @@ services:
     build:
       context: .
       args:
+        REQUIREMENTS_FILE: ${REQUIREMENTS_FILE:-requirements-docker.txt}
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}
         USE_CHINA_APT_MIRROR: ${USE_CHINA_APT_MIRROR:-true}
     container_name: content-agent

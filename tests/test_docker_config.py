@@ -10,10 +10,11 @@ class DockerConfigTest(unittest.TestCase):
         dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
         self.assertIn("FROM python:3.11-slim", dockerfile)
+        self.assertIn("ARG REQUIREMENTS_FILE=requirements-docker.txt", dockerfile)
         self.assertIn("ARG PIP_INDEX_URL=", dockerfile)
         self.assertIn("ARG USE_CHINA_APT_MIRROR=true", dockerfile)
-        self.assertIn("COPY requirements.txt", dockerfile)
-        self.assertIn("pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt", dockerfile)
+        self.assertIn("COPY requirements.txt requirements-docker.txt", dockerfile)
+        self.assertIn("pip install --no-cache-dir -i ${PIP_INDEX_URL} -r ${REQUIREMENTS_FILE}", dockerfile)
         self.assertIn("GRADIO_SERVER_NAME=0.0.0.0", dockerfile)
         self.assertIn("EXPOSE 7861", dockerfile)
         self.assertIn('CMD ["python", "chat_ui.py"]', dockerfile)
@@ -22,6 +23,7 @@ class DockerConfigTest(unittest.TestCase):
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
 
         self.assertIn("content-agent:", compose)
+        self.assertIn("REQUIREMENTS_FILE:", compose)
         self.assertIn("PIP_INDEX_URL:", compose)
         self.assertIn("USE_CHINA_APT_MIRROR:", compose)
         self.assertIn('"7861:7861"', compose)
@@ -35,6 +37,14 @@ class DockerConfigTest(unittest.TestCase):
 
         for pattern in [".git", ".venv", ".env", "output", "data", "__pycache__", "*.pyc"]:
             self.assertIn(pattern, dockerignore)
+
+    def test_docker_requirements_excludes_rag_heavy_dependencies(self):
+        docker_reqs = (ROOT / "requirements-docker.txt").read_text(encoding="utf-8")
+
+        self.assertIn("gradio", docker_reqs)
+        self.assertIn("pydantic-ai", docker_reqs)
+        self.assertNotIn("sentence-transformers", docker_reqs)
+        self.assertNotIn("chromadb", docker_reqs)
 
 
 if __name__ == "__main__":
