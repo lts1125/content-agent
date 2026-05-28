@@ -59,6 +59,29 @@ except ImportError as e:
     print("提示: pip install gradio")
     sys.exit(1)
 
+
+def _patch_gradio_api_info_for_compatibility():
+    """Avoid Gradio 4 API schema crashes with newer dependency combinations."""
+    if getattr(gr.Blocks, "_content_agent_api_info_patched", False):
+        return
+
+    original_get_api_info = gr.Blocks.get_api_info
+
+    def safe_get_api_info(self, *args, **kwargs):
+        try:
+            return original_get_api_info(self, *args, **kwargs)
+        except TypeError as exc:
+            if "argument of type 'bool' is not iterable" not in str(exc):
+                raise
+            logger.warning("Gradio API info generation failed; using empty API info.", exc_info=True)
+            return {}
+
+    gr.Blocks.get_api_info = safe_get_api_info
+    gr.Blocks._content_agent_api_info_patched = True
+
+
+_patch_gradio_api_info_for_compatibility()
+
 # 导入 Agent 组件
 from agents.tools import execute_tool
 from agents.planning import StrategySelector, AutonomousPlanner
