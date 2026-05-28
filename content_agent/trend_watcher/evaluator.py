@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 
 from content_agent.trend_watcher.base import TrendItem
-from content_agent.agent_core import ModelConfig
+from content_agent.config.model_config import ModelConfig
 
 
 class EvaluationResult(BaseModel):

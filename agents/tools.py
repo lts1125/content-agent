@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from pydantic_ai import Agent
-from agents.writer_agent import _ModelConfig
+from content_agent.config.model_config import ModelConfig
 
 
 @dataclass
@@ -220,12 +220,11 @@ class EvaluateTool(BaseTool):
         """执行评估"""
         try:
             if self.editor_agent is None:
+                from content_agent.config.model_config import ModelConfig
                 from agents.editor_agent import EditorAgent
-                from agents.writer_agent import _ModelConfig
-                model, _ = _ModelConfig.from_env()
+                model, _ = ModelConfig.from_env()
                 self.editor_agent = EditorAgent(model)
 
-            # 如果只传了一个平台，使用单平台评估
             if len(kwargs) == 1:
                 platform, content = list(kwargs.items())[0]
                 result = self.editor_agent.run_single(platform, content)
@@ -302,7 +301,7 @@ class DataAnalysisTool(BaseTool):
             name="analyze",
             description="分析数据并生成洞察。参数: data(数据内容), analysis_type(分析类型: summary/trend/comparison)"
         )
-        self.model, _ = _ModelConfig.from_env()
+        self.model, _ = ModelConfig.from_env()
         self._agent = Agent(
             self.model,
             system_prompt="""你是一位数据分析师，擅长从数据中提取洞察。

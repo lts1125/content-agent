@@ -9,7 +9,7 @@ Researcher Agent — 资料搜集 Agent
 
 from pydantic_ai import Agent
 
-from agents.writer_agent import _ModelConfig
+from content_agent.config.model_config import ModelConfig
 
 
 RESEARCH_SYSTEM_PROMPT = """你是一位专业的研究员，擅长搜集和整理技术资料。
@@ -45,7 +45,7 @@ class ResearcherAgent:
     """资料搜集 Agent"""
 
     def __init__(self):
-        self.model, _ = _ModelConfig.from_env()
+        self.model, _ = ModelConfig.from_env()
         self._agent = Agent(
             self.model,
             system_prompt=RESEARCH_SYSTEM_PROMPT,

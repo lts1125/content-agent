@@ -15,14 +15,14 @@ from agents.schemas import WriterOutput, EditVerdict, StyleProfile
 from agents.writer_agent import WriterAgent
 from agents.editor_agent import EditorAgent
 from agents.researcher_agent import ResearcherAgent
-from agents.writer_agent import _ModelConfig
+from content_agent.config.model_config import ModelConfig
 
 
 class Orchestrator:
     """多 Agent 协作调度器"""
 
     def __init__(self):
-        self.model, _ = _ModelConfig.from_env()
+        self.model, _ = ModelConfig.from_env()
         self.agents = {}
         self._init_default_agents()
 

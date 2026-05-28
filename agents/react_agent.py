@@ -14,7 +14,7 @@ from typing import List, Optional
 
 from pydantic_ai import Agent
 
-from agents.writer_agent import _ModelConfig as ModelConfig
+from content_agent.config.model_config import ModelConfig
 from agents.schemas import WriterOutput
 from agents.tools import execute_tool, list_tools
 

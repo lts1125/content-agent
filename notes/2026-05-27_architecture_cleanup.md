@@ -64,7 +64,7 @@ from content_agent.rag.indexer import VaultIndexer
 - 把 `eval_observation`、`suggestions`、`weakest` 明确传给修改 prompt。
 - 记录每轮修改前后的差异，便于 UI 和文章展示。
 
-### 3. 模型配置重复且已经漂移
+### 3. 模型配置重复且已经漂移 【已解决】
 
 位置：
 
@@ -148,7 +148,7 @@ CREATE TABLE schema_version (
 
 - 或使用 `PRAGMA user_version` 管理 schema 版本。
 
-### 6. 工具层存在本机路径硬编码
+### 6. 工具层存在本机路径硬编码 【已解决】
 
 位置：`agents/tools.py`
 

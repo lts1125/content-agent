@@ -9,14 +9,14 @@ from typing import Optional
 from pydantic_ai import Agent
 
 from agents.planning.strategy import ContentType, Strategy, STRATEGIES
-from agents.writer_agent import _ModelConfig
+from content_agent.config.model_config import ModelConfig
 
 
 class StrategySelector:
     """策略选择器"""
 
     def __init__(self):
-        self.model, _ = _ModelConfig.from_env()
+        self.model, _ = ModelConfig.from_env()
         self._agent = Agent(
             self.model,
             system_prompt="""你是一位内容分类专家，擅长识别文本的内容类型。
