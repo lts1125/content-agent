@@ -203,7 +203,7 @@ agents/tools/
   code_execution.py
 ```
 
-### 8. Agent 执行轨迹还不够产品化
+### 8. Agent 执行轨迹还不够产品化 【已解决】
 
 当前已经有 `TaskState`、`drafts`、`edit_history`，但对“系列内容展示”还不够友好。
 

@@ -265,6 +265,15 @@ def init_eval_results_table():
     conn.close()
 
 
+def migrate_tasks_add_trace():
+    """tasks 表增加 trace 字段（执行轨迹持久化）"""
+    if not _column_exists("tasks", "trace"):
+        conn = _get_conn()
+        conn.execute("ALTER TABLE tasks ADD COLUMN trace TEXT")
+        conn.commit()
+        conn.close()
+
+
 def init_db():
     """初始化表结构（幂等）"""
     conn = _get_conn()
@@ -327,6 +336,7 @@ def init_db():
     init_topic_suggestions_table()
     init_ab_test_variants_table()
     init_eval_results_table()
+    migrate_tasks_add_trace()  # P0: 执行轨迹持久化
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)
@@ -372,13 +382,14 @@ def save_task(state: TaskState):
     conn = _get_conn()
     conn.execute(
         """
-        INSERT INTO tasks (task_id, status, note_source, research_data, final_output, metadata, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (task_id, status, note_source, research_data, final_output, metadata, trace, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET
             status=excluded.status,
             research_data=excluded.research_data,
             final_output=excluded.final_output,
             metadata=excluded.metadata,
+            trace=excluded.trace,
             updated_at=excluded.updated_at
         """,
         (
@@ -388,6 +399,7 @@ def save_task(state: TaskState):
             json.dumps(_research_to_dict(state.research_data), ensure_ascii=False),
             json.dumps(_writer_output_to_dict(state.final_output), ensure_ascii=False),
             json.dumps(state.metadata, ensure_ascii=False),
+            json.dumps(state.trace, ensure_ascii=False) if state.trace else None,
             state.created_at,
             state.updated_at,
         ),
@@ -438,6 +450,7 @@ def load_task(task_id: str) -> Optional[TaskState]:
         research_data=_dict_to_research(json.loads(row["research_data"]) if row["research_data"] else None),
         final_output=_dict_to_writer_output(json.loads(row["final_output"]) if row["final_output"] else None),
         metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+        trace=json.loads(row["trace"]) if row.get("trace") else None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )

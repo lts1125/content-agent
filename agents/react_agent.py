@@ -68,7 +68,7 @@ class ReActAgent:
             system_prompt=REACT_SYSTEM_PROMPT.format(tools=self.tools_prompt),
         )
 
-    def run(self, raw_notes: str, platforms: List[str], allow_search: bool = True) -> ReActOutput:
+    def run(self, raw_notes: str, platforms: List[str], allow_search: bool = True, save_trace_path: Optional[str] = None) -> ReActOutput:
         """
         执行完整的 ReAct 循环（含评估-修改）
 
@@ -188,12 +188,31 @@ class ReActAgent:
                         print("   ⚠️ ReAct: 无评估结果，跳过精细化修改")
 
         # 超过最大修改次数，返回最后一次结果
-        return ReActOutput(
+        output = ReActOutput(
             content=current_content,
             steps=steps,
             reasoning=f"完成：分析 -> {'搜索 -> ' if search_done else ''}生成 -> 评估({score}分) -> 多次修改未达标",
             final_score=score,
         )
+
+        # 持久化执行轨迹
+        if save_trace_path:
+            try:
+                trace_data = {
+                    "reasoning": output.reasoning,
+                    "final_score": output.final_score,
+                    "steps": [
+                        {"thought": s.thought, "action": s.action, "observation": s.observation}
+                        for s in output.steps
+                    ],
+                    "platforms": platforms,
+                }
+                with open(save_trace_path, "w", encoding="utf-8") as f:
+                    json.dump(trace_data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"   ⚠️ ReAct: 轨迹保存失败: {e}")
+
+        return output
 
     def _evaluate_step(self, content: WriterOutput, platforms: List[str], attempt: int):
         """执行评估步骤，返回 (step, score, verdict)

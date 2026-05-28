@@ -63,6 +63,16 @@ class Orchestrator:
             state.metadata["finished_at"] - state.metadata["started_at"], 2
         )
 
+        # 记录执行轨迹
+        state.trace = {
+            "plan": plan.steps,
+            "drafts_count": len(state.drafts),
+            "edit_loops": len(state.edit_history),
+            "final_score": state.edit_history[-1].overall if state.edit_history else None,
+            "duration_sec": state.metadata["duration_sec"],
+            "llm_calls": state.metadata.get("llm_calls", 0),
+        }
+
         # 4. Eval 评估
         self._run_eval(state, task_input)
 

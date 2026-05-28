@@ -49,6 +49,7 @@ class TaskState:
     edit_history: List["EditVerdict"] = field(default_factory=list)
     final_output: Optional["WriterOutput"] = None
     metadata: dict = field(default_factory=dict)
+    trace: Optional[dict] = None                     # 执行轨迹（ReAct/Orchestrator 步骤）
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
 

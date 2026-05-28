@@ -916,37 +916,7 @@ def _run_react_mode(args):
     print(f"🎯 目标平台: {', '.join(platforms)}")
 
     # 运行 Agent
-    if args.v2:
-        # 使用新架构（Orchestrator + 多 Agent 协作）
-        print("\n🚀 启动多 Agent 协作模式 (Orchestrator)...")
-        from agents.collaboration.orchestrator import Orchestrator
-        orch = Orchestrator()
-        orch_result = orch.run(raw_notes, platforms)
-
-        # 显示结果
-        print(f"\n✅ 生成完成！")
-        if orch_result.get("content"):
-            for platform in platforms:
-                content = getattr(orch_result["content"], platform, "")
-                if content:
-                    print(f"  {platform}: {len(content)} 字")
-
-        # 保存到文件
-        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        if orch_result.get("content"):
-            for platform in platforms:
-                content = getattr(orch_result["content"], platform, "")
-                if content:
-                    file_path = output_dir / f"{platform}.md"
-                    with open(file_path, "w", encoding="utf-8") as f:
-                        f.write(content)
-                    print(f"  💾 已保存: {file_path}")
-
-        # 统一 result 变量用于后续配图生成
-        result = orch_result.get("content")
-    elif args.autonomous:
+    if args.autonomous:
         # 使用自主规划模式
         print("\n🚀 启动自主规划模式...")
         from agents.planning import StrategySelector, AutonomousPlanner
@@ -983,10 +953,15 @@ def _run_react_mode(args):
         # 统一 result 变量用于后续配图生成
         result = plan_result.get("content")
     else:
-        # 使用旧架构（ReAct Agent）
+        # 使用 ReAct Agent
         print("\n🚀 启动 ReAct Agent...")
+        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir.mkdir(parents=True, exist_ok=True)
         agent = ReActAgent(max_steps=3)
-        react_result = agent.run(raw_notes, platforms, allow_search=bool(args.topic))
+        react_result = agent.run(
+            raw_notes, platforms, allow_search=bool(args.topic),
+            save_trace_path=str(output_dir / "trace.json")
+        )
 
         print(f"\n✅ 生成完成！")
         print(f"步骤数: {len(react_result.steps)}")
@@ -1000,9 +975,6 @@ def _run_react_mode(args):
             print(f"  {platform}: {len(content)} 字")
 
         # 保存到文件
-        output_dir = Path("output/react") / datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir.mkdir(parents=True, exist_ok=True)
-
         for platform in platforms:
             content = getattr(react_result.content, platform, "")
             if content:
