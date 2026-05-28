@@ -866,8 +866,10 @@ def create_chat_ui():
         title="Content Agent - 聊天模式",
         theme=theme,
         css="""
-        .chat-container { height: 600px; }
-        .input-box { margin-top: 20px; }
+        .app-intro h1 { margin-bottom: 8px; }
+        .app-intro p { margin: 4px 0; }
+        .app-intro ul { margin: 6px 0 10px 20px; }
+        .input-box { margin-top: 8px; }
         .publish-box { margin-top: 16px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; }
         """
     ) as demo:
@@ -878,18 +880,13 @@ def create_chat_ui():
         gr.Markdown("""
         # 🤖 Content Agent - AI 内容创作助手
         
-        用自然语言告诉我你想创作什么内容，我会自动分析、搜索资料、生成文案。
-        
-        **示例：**
-        - "帮我写一篇关于 MCP 协议的公众号文章"
-        - "生成小红书笔记：程序员颈椎拯救计划"
-        - "把 Python 异步编程改写成抖音口播脚本"
-        """)
+        用自然语言告诉我你想创作什么内容，我会自动分析、搜索资料、生成文案。示例："帮我写一篇关于 MCP 协议的公众号文章" / "生成小红书笔记：程序员颈椎拯救计划"
+        """, elem_classes=["app-intro"])
         
         # 聊天区域
         chatbot = gr.Chatbot(
             label="对话",
-            height=500,
+            height=360,
             type="messages",
         )
         
@@ -903,20 +900,22 @@ def create_chat_ui():
             )
             send_btn = gr.Button("发送", scale=1, variant="primary")
 
-        note_upload = gr.File(
-            label="上传笔记（.md / .txt，可选）",
-            file_types=[".md", ".txt"],
-            type="filepath",
-        )
-
-        download_files = gr.File(
-            label="下载生成内容（Markdown）",
-            value=None,
-            file_count="multiple",
-            type="filepath",
-            interactive=False,
-            visible=False,
-        )
+        with gr.Row():
+            note_upload = gr.File(
+                label="上传笔记（.md / .txt，可选）",
+                file_types=[".md", ".txt"],
+                type="filepath",
+                scale=1,
+            )
+            download_files = gr.File(
+                label="下载生成内容（Markdown）",
+                value=None,
+                file_count="multiple",
+                type="filepath",
+                interactive=False,
+                visible=False,
+                scale=1,
+            )
         
         # 快捷按钮
         with gr.Row():
@@ -926,22 +925,23 @@ def create_chat_ui():
             clear_btn = gr.Button("🗑️ 清空对话", size="sm", variant="secondary")
         
         # 公众号发布区域
-        with gr.Row(variant="panel"):
-            with gr.Column(scale=1):
-                cover_upload = gr.Image(
-                    label="📷 公众号封面",
-                    type="filepath",
-                    height=150,
-                    show_label=True,
-                )
-            with gr.Column(scale=2):
-                pub_status = gr.Textbox(
-                    label="发布状态",
-                    value="等待生成内容...",
-                    interactive=False,
-                    show_label=True,
-                )
-                publish_btn = gr.Button("📤 发布到公众号草稿箱", variant="primary", size="sm")
+        with gr.Accordion("📤 发布到公众号草稿箱", open=False):
+            with gr.Row(variant="panel"):
+                with gr.Column(scale=1):
+                    cover_upload = gr.Image(
+                        label="📷 公众号封面",
+                        type="filepath",
+                        height=120,
+                        show_label=True,
+                    )
+                with gr.Column(scale=2):
+                    pub_status = gr.Textbox(
+                        label="发布状态",
+                        value="等待生成内容...",
+                        interactive=False,
+                        show_label=True,
+                    )
+                    publish_btn = gr.Button("📤 发布到公众号草稿箱", variant="primary", size="sm")
         
         # 事件绑定
         send_btn.click(
