@@ -21,6 +21,13 @@ class ChatUiConfigTest(unittest.TestCase):
 
         self.assertEqual([], missing)
 
+    def test_api_info_can_be_generated(self):
+        demo = chat_ui.create_chat_ui()
+
+        api_info = demo.get_api_info()
+
+        self.assertIsInstance(api_info, dict)
+
 
 class ChatProgressTest(unittest.TestCase):
     def test_progress_message_marks_done_running_and_pending_steps(self):
@@ -61,7 +68,7 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual("assistant", first_history[1]["role"])
         self.assertIn("🔄 分析需求", first_history[1]["content"])
         self.assertEqual("生成完成", final_history[-1]["content"])
-        self.assertEqual(4, len(updates[-1]))
+        self.assertEqual(6, len(updates[-1]))
 
     def test_save_generated_markdown_files_returns_platform_files(self):
         with TemporaryDirectory() as tmp_dir:

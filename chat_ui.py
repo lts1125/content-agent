@@ -128,9 +128,14 @@ def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -
     return files
 
 
-def _download_files_update(files):
+def _download_button_updates(files):
     files = files or []
-    return gr.update(value=files if files else None, visible=bool(files))
+    by_platform = {Path(file).stem: file for file in files}
+    return (
+        gr.update(value=by_platform.get("gongzhonghao"), visible=bool(by_platform.get("gongzhonghao"))),
+        gr.update(value=by_platform.get("xiaohongshu"), visible=bool(by_platform.get("xiaohongshu"))),
+        gr.update(value=by_platform.get("douyin"), visible=bool(by_platform.get("douyin"))),
+    )
 
 
 def _result_to_response(result: dict) -> tuple[str, str, list[str]]:
@@ -780,7 +785,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
         )
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
-        yield "", _copy_chat_history(chat_history), "", _download_files_update([])
+        yield "", _copy_chat_history(chat_history), "", *_download_button_updates([])
         return
 
     progress_events = []
@@ -797,7 +802,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 progress_index = len(chat_history) - 1
             else:
                 chat_history[progress_index]["content"] = progress_content
-            yield "", _copy_chat_history(chat_history), gzh_path, _download_files_update(download_files)
+            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files)
             continue
 
         if payload.get("type") == "result":
@@ -806,14 +811,14 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 chat_history.append({"role": "assistant", "content": response})
             else:
                 chat_history[progress_index]["content"] = response
-            yield "", _copy_chat_history(chat_history), gzh_path, _download_files_update(download_files)
+            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files)
             return
 
     if progress_index is not None:
         chat_history[progress_index]["content"] = "⚠️ 生成流程没有返回结果，请重试。"
     else:
         chat_history.append({"role": "assistant", "content": "⚠️ 生成流程没有返回结果，请重试。"})
-    yield "", _copy_chat_history(chat_history), gzh_path, _download_files_update(download_files)
+    yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files)
 
 
 def create_chat_ui():
@@ -827,7 +832,7 @@ def create_chat_ui():
     def clear_history():
         """清空历史"""
         agent.history = []
-        return [], "", _download_files_update([])
+        return [], "", *_download_button_updates([])
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -907,15 +912,11 @@ def create_chat_ui():
                 type="filepath",
                 scale=1,
             )
-            download_files = gr.File(
-                label="下载生成内容（Markdown）",
-                value=None,
-                file_count="multiple",
-                type="filepath",
-                interactive=False,
-                visible=False,
-                scale=1,
-            )
+            with gr.Column(scale=1):
+                with gr.Row():
+                    download_gzh = gr.DownloadButton("⬇️ 公众号", value=None, visible=False, size="sm")
+                    download_xhs = gr.DownloadButton("⬇️ 小红书", value=None, visible=False, size="sm")
+                    download_dy = gr.DownloadButton("⬇️ 抖音", value=None, visible=False, size="sm")
         
         # 快捷按钮
         with gr.Row():
@@ -947,18 +948,18 @@ def create_chat_ui():
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_files]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_files]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot, last_gzh_file, download_files]
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
         )
         
         # 快捷按钮事件
@@ -973,15 +974,15 @@ def create_chat_ui():
         
         btn_gzh.click(
             quick_gzh,
-            outputs=[msg_input, chatbot, last_gzh_file, download_files]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
         )
         btn_xhs.click(
             quick_xhs,
-            outputs=[msg_input, chatbot, last_gzh_file, download_files]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
         )
         btn_dy.click(
             quick_dy,
-            outputs=[msg_input, chatbot, last_gzh_file, download_files]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
         )
         
         # 发布按钮事件
