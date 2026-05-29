@@ -70,12 +70,16 @@ def _patch_gradio_api_info_for_compatibility():
     def safe_get_api_info(self, *args, **kwargs):
         try:
             return original_get_api_info(self, *args, **kwargs)
-        except TypeError as exc:
-            msg = str(exc)
-            if "argument of type 'bool' is not iterable" in msg or "unhashable type: 'dict'" in msg:
-                logger.warning("Gradio API info generation failed; using empty API info.", exc_info=True)
-                return {}
-            raise
+        except Exception as exc:
+            # Log the real error so we can diagnose version mismatches in Docker.
+            logger.warning(
+                "Gradio get_api_info() failed (%s: %s). "
+                "Falling back to empty endpoints so the UI can still submit events.",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+            return {"named_endpoints": {}, "unnamed_endpoints": {}}
 
     gr.Blocks.get_api_info = safe_get_api_info
     gr.Blocks._content_agent_api_info_patched = True
