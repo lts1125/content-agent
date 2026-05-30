@@ -17,6 +17,7 @@ import json
 import logging
 import queue
 import re
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -136,6 +137,7 @@ _patch_starlette_template_response()
 from agents.tools import execute_tool
 from agents.planning import StrategySelector, AutonomousPlanner
 from agents.schemas import WriterOutput
+from content_agent.html_renderer import XiaohongshuRenderer
 
 
 # ==================== 聊天核心逻辑 ====================
@@ -186,7 +188,7 @@ def _merge_progress_event(events: list, event: dict) -> list:
 
 
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
-    """保存各平台 Markdown，返回可下载的文件列表。"""
+    """保存各平台 Markdown，小红书同步生成 HTML 配图，并打包成 zip 供一键下载，返回可下载的文件列表。"""
     files = []
 
     for platform in platforms:
@@ -197,6 +199,28 @@ def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -
         file_path = output_dir / f"{platform}.md"
         file_path.write_text(text, encoding="utf-8")
         files.append(str(file_path))
+
+        # 小红书同步生成 HTML 配图
+        if platform == "xiaohongshu":
+            try:
+                renderer = XiaohongshuRenderer()
+                html_path = Path(renderer.render(text, output_dir))
+                target_html = output_dir / "xiaohongshu.html"
+                html_path.rename(target_html)
+                files.append(str(target_html))
+            except Exception as e:
+                logger.warning(f"小红书 HTML 配图生成失败: {e}")
+
+    # 小红书：将 md + html 打包成 zip，方便一键下载
+    xhs_md = output_dir / "xiaohongshu.md"
+    xhs_html = output_dir / "xiaohongshu.html"
+    if xhs_md.exists() and xhs_html.exists():
+        import zipfile
+        zip_path = output_dir / "xiaohongshu.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.write(xhs_md, xhs_md.name)
+            zf.write(xhs_html, xhs_html.name)
+        files.append(str(zip_path))
 
     return files
 
@@ -231,6 +255,30 @@ def _result_to_response(result: dict) -> tuple[str, str, list[str]]:
     else:
         response = result["content"]
     return response, gzh_path, download_files
+
+
+def _scale_html(html: str, scale: float = 0.48) -> str:
+    def replace_px(match):
+        val = int(match.group(1))
+        if val <= 3:
+            return match.group(0)
+        scaled = max(1, int(val * scale))
+        return f"{scaled}px"
+    return re.sub(r'(\d+)px', replace_px, html)
+
+
+def _render_xiaohongshu_preview(text: str) -> str:
+    if not text or text.startswith("❌") or text == "（未选择此平台）":
+        return ""
+    try:
+        renderer = XiaohongshuRenderer()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            html_path = renderer.render(text, Path(tmpdir))
+            html_content = Path(html_path).read_text(encoding="utf-8")
+            return _scale_html(html_content, scale=0.48)
+    except Exception as e:
+        logger.warning(f"小红书 HTML 预览生成失败: {e}")
+        return ""
 
 
 def _copy_chat_history(chat_history: list) -> list:
@@ -858,7 +906,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
         )
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
-        yield "", _copy_chat_history(chat_history), "", *_download_button_updates([])
+        yield "", _copy_chat_history(chat_history), "", *_download_button_updates([]), gr.update(value="", visible=False)
         return
 
     progress_events = []
@@ -875,7 +923,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 progress_index = len(chat_history) - 1
             else:
                 chat_history[progress_index]["content"] = progress_content
-            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files)
+            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False)
             continue
 
         if payload.get("type") == "result":
@@ -884,14 +932,29 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 chat_history.append({"role": "assistant", "content": response})
             else:
                 chat_history[progress_index]["content"] = response
-            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files)
+            xiaohongshu_html = ""
+            for f in download_files:
+                if Path(f).stem == "xiaohongshu" and f.endswith(".md"):
+                    try:
+                        text = Path(f).read_text(encoding="utf-8")
+                        xiaohongshu_html = _render_xiaohongshu_preview(text)
+                    except Exception as e:
+                        logger.warning(f"小红书 HTML 预览生成失败: {e}")
+                    break
+            yield (
+                "",
+                _copy_chat_history(chat_history),
+                gzh_path,
+                *_download_button_updates(download_files),
+                gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html)),
+            )
             return
 
     if progress_index is not None:
         chat_history[progress_index]["content"] = "⚠️ 生成流程没有返回结果，请重试。"
     else:
         chat_history.append({"role": "assistant", "content": "⚠️ 生成流程没有返回结果，请重试。"})
-    yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files)
+    yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False)
 
 
 def create_chat_ui():
@@ -905,7 +968,7 @@ def create_chat_ui():
     def clear_history():
         """清空历史"""
         agent.history = []
-        return [], "", *_download_button_updates([])
+        return [], "", *_download_button_updates([]), gr.update(value="", visible=False)
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -998,6 +1061,9 @@ def create_chat_ui():
             btn_dy = gr.Button("🎵 抖音文案", size="sm")
             clear_btn = gr.Button("🗑️ 清空对话", size="sm", variant="secondary")
         
+        # 小红书 HTML 预览
+        xhs_preview = gr.HTML(visible=False)
+        
         # 公众号发布区域
         with gr.Accordion("📤 发布到公众号草稿箱", open=False):
             with gr.Row(variant="panel"):
@@ -1021,18 +1087,18 @@ def create_chat_ui():
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
         )
         
         # 快捷按钮事件
@@ -1047,15 +1113,15 @@ def create_chat_ui():
         
         btn_gzh.click(
             quick_gzh,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
         )
         btn_xhs.click(
             quick_xhs,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
         )
         btn_dy.click(
             quick_dy,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
         )
         
         # 发布按钮事件
