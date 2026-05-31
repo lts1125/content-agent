@@ -310,6 +310,45 @@ def init_user_preferences_table():
     conn.close()
 
 
+def init_review_panels_table():
+    """审核面板表"""
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS review_panels (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         TEXT    NOT NULL,
+            overall         INTEGER,
+            threshold       INTEGER,
+            passed          INTEGER,
+            verdict_text    TEXT,
+            user_decision   TEXT,
+            revision_prompt TEXT,
+            raw_content     TEXT,
+            platforms       TEXT,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS review_items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            panel_id    INTEGER NOT NULL,
+            dimension   TEXT    NOT NULL,
+            score       INTEGER,
+            threshold   INTEGER,
+            passed      INTEGER,
+            suggestion  TEXT,
+            ignored     INTEGER DEFAULT 0,
+            FOREIGN KEY (panel_id) REFERENCES review_panels(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_review_task ON review_panels(task_id);
+        CREATE INDEX IF NOT EXISTS idx_review_items_panel ON review_items(panel_id);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def migrate_tasks_add_trace():
     """tasks 表增加 trace 字段（执行轨迹持久化）"""
     if not _column_exists("tasks", "trace"):
@@ -384,6 +423,7 @@ def init_db():
     migrate_tasks_add_trace()  # P0: 执行轨迹持久化
     init_conversation_turns_table()  # 记忆系统: 会话历史
     init_user_preferences_table()    # 记忆系统: 用户偏好
+    init_review_panels_table()       # 审核面板
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)
@@ -716,3 +756,141 @@ def get_user_preferences(user_id: str = "default") -> dict:
         except json.JSONDecodeError:
             prefs[r["pref_key"]] = r["pref_value"]
     return prefs
+
+
+# ---------------------------------------------------------------------------
+# 审核面板
+# ---------------------------------------------------------------------------
+
+def save_review_panel(panel, task_id: str) -> None:
+    """保存审核面板"""
+    from agents.review import ReviewPanel, ReviewItem
+
+    conn = _get_conn()
+    # 删除旧数据
+    old = conn.execute("SELECT id FROM review_panels WHERE task_id = ?", (task_id,)).fetchone()
+    if old:
+        conn.execute("DELETE FROM review_items WHERE panel_id = ?", (old["id"],))
+        conn.execute("DELETE FROM review_panels WHERE id = ?", (old["id"],))
+
+    raw_content_json = ""
+    if panel.raw_content is not None:
+        try:
+            raw_content_json = json.dumps(panel.raw_content.model_dump(), ensure_ascii=False)
+        except Exception:
+            pass
+
+    cur = conn.execute(
+        """
+        INSERT INTO review_panels
+            (task_id, overall, threshold, passed, verdict_text, user_decision, revision_prompt, raw_content, platforms)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            task_id,
+            panel.overall,
+            panel.threshold,
+            int(panel.passed),
+            panel.verdict_text,
+            panel.user_decision,
+            panel.revision_prompt,
+            raw_content_json,
+            json.dumps(panel.platforms, ensure_ascii=False),
+        ),
+    )
+    panel_id = cur.lastrowid
+
+    for item in panel.items:
+        conn.execute(
+            """
+            INSERT INTO review_items
+                (panel_id, dimension, score, threshold, passed, suggestion, ignored)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                panel_id,
+                item.dimension,
+                item.score,
+                item.threshold,
+                int(item.passed),
+                item.suggestion,
+                int(item.ignored),
+            ),
+        )
+
+    conn.commit()
+    conn.close()
+
+
+def load_review_panel(task_id: str) -> Optional["ReviewPanel"]:
+    """加载审核面板"""
+    from agents.review import ReviewPanel, ReviewItem
+
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM review_panels WHERE task_id = ?", (task_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return None
+
+    items_rows = conn.execute(
+        "SELECT * FROM review_items WHERE panel_id = ?", (row["id"],)
+    ).fetchall()
+    conn.close()
+
+    items = []
+    for r in items_rows:
+        items.append(
+            ReviewItem(
+                dimension=r["dimension"],
+                score=r["score"],
+                threshold=r["threshold"],
+                passed=bool(r["passed"]),
+                suggestion=r["suggestion"] or "",
+                ignored=bool(r["ignored"]),
+            )
+        )
+
+    panel = ReviewPanel(
+        overall=row["overall"],
+        threshold=row["threshold"],
+        passed=bool(row["passed"]),
+        items=items,
+        verdict_text=row["verdict_text"] or "",
+        user_decision=row["user_decision"],
+        revision_prompt=row["revision_prompt"] or "",
+        platforms=json.loads(row["platforms"]) if row["platforms"] else [],
+    )
+
+    if row["raw_content"]:
+        try:
+            from agents.schemas import WriterOutput
+            panel.raw_content = WriterOutput(**json.loads(row["raw_content"]))
+        except Exception:
+            pass
+
+    return panel
+
+
+def list_review_panels(limit: int = 50) -> List[dict]:
+    """列出审核面板列表，按创建时间倒序"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT id, task_id, overall, threshold, passed, verdict_text, user_decision, created_at "
+        "FROM review_panels ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        result.append({
+            "id": r["id"],
+            "task_id": r["task_id"],
+            "overall": r["overall"],
+            "threshold": r["threshold"],
+            "passed": bool(r["passed"]),
+            "verdict_text": r["verdict_text"] or "",
+            "user_decision": r["user_decision"],
+            "created_at": r["created_at"],
+        })
+    return result

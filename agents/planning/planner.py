@@ -1,7 +1,5 @@
 """
 自主规划器
-
-根据策略自动执行流程
 """
 
 from typing import Callable, List, Optional
@@ -37,6 +35,7 @@ class AutonomousPlanner:
         platforms: List[str],
         strategy: Strategy,
         progress_callback: Optional[Callable[[dict], None]] = None,
+        enable_review_panel: bool = False,
     ) -> dict:
         """
         根据策略自动执行流程
@@ -45,9 +44,11 @@ class AutonomousPlanner:
             raw_notes: 原始笔记
             platforms: 目标平台
             strategy: 执行策略
+            progress_callback: 进度回调
+            enable_review_panel: 是否启用审核面板（chat_ui 模式）
 
         Returns:
-            执行结果
+            执行结果，启用审核面板时可能包含 "review" 键
         """
         print(f"\n📋 使用策略: {strategy.name} ({strategy.description})")
         print(f"   步骤: {' → '.join(strategy.steps)}")
@@ -124,6 +125,23 @@ class AutonomousPlanner:
                         total_steps=len(strategy.steps),
                     )
                     break
+
+                # 审核面板模式：第一轮未通过时返回 review 结果
+                if enable_review_panel and attempt == 0 and context.edit_verdict:
+                    from agents.review import ReviewManager
+                    panel = ReviewManager.create_panel(
+                        context.edit_verdict, threshold=strategy.threshold
+                    )
+                    panel.raw_content = context.draft_content
+                    panel.platforms = platforms
+                    print(f"   🔍 进入审核面板 (评分: {score})")
+                    return {
+                        "content": context.draft_content,
+                        "verdict": context.edit_verdict,
+                        "history": context.history,
+                        "strategy": strategy.name,
+                        "review": panel,
+                    }
 
                 if has_modify and attempt < 2:
                     modify_idx = strategy.steps.index("modify") if "modify" in strategy.steps else len(strategy.steps) - 1

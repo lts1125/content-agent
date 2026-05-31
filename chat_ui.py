@@ -239,10 +239,11 @@ def _download_button_updates(files):
     )
 
 
-def _result_to_response(result: dict) -> tuple[str, str, list[str]]:
-    """把 Agent 结果转换为聊天文本、公众号文件路径和下载文件列表。"""
+def _result_to_response(result: dict) -> tuple[str, str, list[str], bool]:
+    """把 Agent 结果转换为聊天文本、公众号文件路径、下载文件列表和是否显示审核按钮。"""
     gzh_path = ""
     download_files = []
+    show_review = False
     if result["type"] == "content":
         response = result["content"]
         download_files = result.get("files", [])
@@ -256,9 +257,12 @@ def _result_to_response(result: dict) -> tuple[str, str, list[str]]:
                     break
         if download_files:
             response += "\n📥 可以在下方按文件下载 Markdown。"
+    elif result["type"] == "review":
+        response = result["content"]
+        show_review = True
     else:
         response = result["content"]
-    return response, gzh_path, download_files
+    return response, gzh_path, download_files, show_review
 
 
 def _scale_html(html: str, scale: float = 0.48) -> str:
@@ -783,6 +787,7 @@ class ChatAgent:
                         platforms,
                         strategy,
                         progress_callback=_on_progress,
+                        enable_review_panel=True,
                     )
                 except Exception as exc:
                     result_holder["error"] = exc
@@ -810,6 +815,30 @@ class ChatAgent:
             content = result.get("content")
             if not content:
                 yield {"type": "result", "result": {"type": "error", "content": "生成失败，请重试"}}
+                return
+
+            # 检查是否进入审核面板
+            review_panel = result.get("review")
+            if review_panel:
+                from agents.review import ReviewManager
+                panel = review_panel
+                panel.raw_content = content
+                panel.platforms = platforms
+                # 保存到数据库
+                task_id = getattr(self, "_current_task_id", self.session_id)
+                ReviewManager.save_panel(panel, task_id)
+
+                review_md = panel.to_markdown()
+                yield {
+                    "type": "result",
+                    "result": {
+                        "type": "review",
+                        "panel": panel,
+                        "content": review_md,
+                        "raw_content": content,
+                        "platforms": platforms,
+                    },
+                }
                 return
 
             yield {
@@ -1076,7 +1105,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
             process_message = message
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
-        yield "", _copy_chat_history(chat_history), "", *_download_button_updates([]), gr.update(value="", visible=False)
+        yield "", _copy_chat_history(chat_history), "", *_download_button_updates([]), gr.update(value="", visible=False), gr.update(visible=False), None
         return
 
     progress_events = []
@@ -1093,11 +1122,11 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 progress_index = len(chat_history) - 1
             else:
                 chat_history[progress_index]["content"] = progress_content
-            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False)
+            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False), gr.update(visible=False), None
             continue
 
         if payload.get("type") == "result":
-            response, gzh_path, download_files = _result_to_response(payload["result"])
+            response, gzh_path, download_files, show_review = _result_to_response(payload["result"])
             if progress_index is None:
                 chat_history.append({"role": "assistant", "content": response})
             else:
@@ -1111,12 +1140,18 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                     except Exception as e:
                         logger.warning(f"小红书 HTML 预览生成失败: {e}")
                     break
+            # 如果是 review 类型，保存 panel 到状态
+            review_panel_data = None
+            if payload["result"].get("type") == "review":
+                review_panel_data = payload["result"].get("panel")
             yield (
                 "",
                 _copy_chat_history(chat_history),
                 gzh_path,
                 *_download_button_updates(download_files),
-                gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html)),
+                gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html) and not show_review),
+                gr.update(visible=show_review),
+                review_panel_data,
             )
             return
 
@@ -1124,7 +1159,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
         chat_history[progress_index]["content"] = "⚠️ 生成流程没有返回结果，请重试。"
     else:
         chat_history.append({"role": "assistant", "content": "⚠️ 生成流程没有返回结果，请重试。"})
-    yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False)
+    yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False), gr.update(visible=False), None
 
 
 def create_chat_ui():
@@ -1139,7 +1174,7 @@ def create_chat_ui():
     def clear_history():
         """清空历史"""
         agent.reset_session()
-        return [], "", *_download_button_updates([]), gr.update(value="", visible=False)
+        return [], "", *_download_button_updates([]), gr.update(value="", visible=False), gr.update(visible=False), None
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -1234,6 +1269,13 @@ def create_chat_ui():
         
         # 小红书 HTML 预览
         xhs_preview = gr.HTML(visible=False)
+
+        # 审核面板按钮（默认隐藏）
+        with gr.Row(visible=False) as review_row:
+            btn_revise = gr.Button("采纳修改", variant="primary", size="sm")
+            btn_ignore = gr.Button("忽略未通过项", size="sm")
+            btn_force = gr.Button("强行发布", variant="stop", size="sm")
+        review_state = gr.State(None)
         
         # 公众号发布区域
         with gr.Accordion("📤 发布到公众号草稿箱", open=False):
@@ -1258,18 +1300,18 @@ def create_chat_ui():
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
         )
         
         # 快捷按钮事件
@@ -1284,15 +1326,15 @@ def create_chat_ui():
         
         btn_gzh.click(
             quick_gzh,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
         )
         btn_xhs.click(
             quick_xhs,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
         )
         btn_dy.click(
             quick_dy,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
         )
         
         # 发布按钮事件
@@ -1301,7 +1343,153 @@ def create_chat_ui():
             inputs=[cover_upload, last_gzh_file],
             outputs=[pub_status]
         )
-        
+
+        # 审核按钮事件
+        def on_review_decision(decision, panel_data, chat_history):
+            from agents.review import ReviewManager
+            chat_history = list(chat_history)
+            if panel_data is None:
+                chat_history.append({"role": "assistant", "content": "⚠️ 审核面板数据已失效，请重新生成。"})
+                return (
+                    _copy_chat_history(chat_history),
+                    gr.update(visible=False),
+                    None,
+                    "",
+                    *_download_button_updates([]),
+                    gr.update(value="", visible=False),
+                )
+
+            panel = panel_data
+            decision_result = ReviewManager.apply_user_decision(panel, decision)
+            action = decision_result["action"]
+
+            if action == "publish":
+                content = panel.raw_content
+                platforms = panel.platforms
+                output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                files = _save_generated_markdown_files(content, platforms, output_dir)
+                output_text = f"✅ 已生成 {len(platforms)} 个平台的内容\n\n"
+                if panel.ignored_count > 0:
+                    output_text += f"📊 评分: {panel.effective_score}/100 (忽略后)\n\n"
+                else:
+                    output_text += f"📊 评分: {panel.overall}/100\n\n"
+                gzh_path = ""
+                for platform in platforms:
+                    text = getattr(content, platform, "")
+                    if text:
+                        output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
+                    for f in files:
+                        if platform in f and f.endswith(".md") and platform == "gongzhonghao":
+                            gzh_path = f
+                chat_history.append({"role": "assistant", "content": output_text})
+                xiaohongshu_html = ""
+                for f in files:
+                    if Path(f).stem == "xiaohongshu" and f.endswith(".md"):
+                        try:
+                            text = Path(f).read_text(encoding="utf-8")
+                            xiaohongshu_html = _render_xiaohongshu_preview(text)
+                        except Exception as e:
+                            logger.warning(f"小红书 HTML 预览生成失败: {e}")
+                        break
+                return (
+                    _copy_chat_history(chat_history),
+                    gr.update(visible=False),
+                    None,
+                    gzh_path,
+                    *_download_button_updates(files),
+                    gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html)),
+                )
+
+            if action == "revise":
+                chat_history.append({"role": "assistant", "content": f"🔄 已采纳修改意见。\n\n**修改指令**：\n{panel.get_revision_prompt()}\n\n请重新输入相同需求以应用修改后重新生成。"})
+                return (
+                    _copy_chat_history(chat_history),
+                    gr.update(visible=False),
+                    None,
+                    "",
+                    *_download_button_updates([]),
+                    gr.update(value="", visible=False),
+                )
+
+            if action == "retry":
+                chat_history.append({"role": "assistant", "content": f"⚠️ 忽略未通过项后评分仍为 {panel.effective_score}/100，未达标。\n\n**建议**：{panel.get_revision_prompt()}\n\n请重新输入相同需求以应用修改后重新生成。"})
+                return (
+                    _copy_chat_history(chat_history),
+                    gr.update(visible=False),
+                    None,
+                    "",
+                    *_download_button_updates([]),
+                    gr.update(value="", visible=False),
+                )
+
+            chat_history.append({"role": "assistant", "content": "未知的审核决策。"})
+            return (
+                _copy_chat_history(chat_history),
+                gr.update(visible=False),
+                None,
+                "",
+                *_download_button_updates([]),
+                gr.update(value="", visible=False),
+            )
+
+        def on_revise_generate(panel_data, chat_history):
+            chat_history = list(chat_history)
+            if panel_data is None:
+                chat_history.append({"role": "assistant", "content": "⚠️ 审核面板数据已失效，请重新生成。"})
+                yield (
+                    "",
+                    _copy_chat_history(chat_history),
+                    "",
+                    *_download_button_updates([]),
+                    gr.update(value="", visible=False),
+                    gr.update(visible=False),
+                    None,
+                )
+                return
+
+            panel = panel_data
+            revision_prompt = panel.get_revision_prompt()
+
+            # 从聊天记录中提取用户原始需求
+            original_message = ""
+            for msg in reversed(chat_history):
+                if msg.get("role") == "user":
+                    original_message = msg.get("content", "")
+                    break
+
+            revised_message = f"{original_message}\n\n【系统：根据以下修改意见重新生成】\n{revision_prompt}"
+
+            # 先隐藏审核面板
+            yield (
+                "",
+                _copy_chat_history(chat_history),
+                "",
+                *_download_button_updates([]),
+                gr.update(value="", visible=False),
+                gr.update(visible=False),
+                None,
+            )
+
+            # 自动携带修改意见重新生成
+            yield from _respond_stream(agent, revised_message, chat_history, None)
+
+        btn_revise.click(
+            on_revise_generate,
+            inputs=[review_state, chatbot],
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+        )
+        btn_ignore.click(
+            lambda panel, hist: on_review_decision("ignore", panel, hist),
+            inputs=[review_state, chatbot],
+            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+        )
+        btn_force.click(
+            lambda panel, hist: on_review_decision("force_publish", panel, hist),
+            inputs=[review_state, chatbot],
+            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+        )
+
         # 使用说明
         with gr.Accordion("📖 使用说明", open=False):
             gr.Markdown("""
