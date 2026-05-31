@@ -35,7 +35,8 @@ _mock_gr.Image = unittest.mock.MagicMock
 _mock_gr.File = unittest.mock.MagicMock
 _mock_gr.Markdown = unittest.mock.MagicMock
 _mock_gr.Chatbot = unittest.mock.MagicMock
-_mock_gr.Blocks = unittest.mock.MagicMock
+_mock_gr.Blocks = unittest.mock.MagicMock()
+_mock_gr.Blocks.get_api_info = unittest.mock.MagicMock(return_value={"named_endpoints": {}, "unnamed_endpoints": {}})
 _mock_gr.JSON = unittest.mock.MagicMock
 sys.modules["gradio"] = _mock_gr
 
@@ -76,6 +77,7 @@ init_db = store_mod.init_db
 save_review_panel = store_mod.save_review_panel
 load_review_panel = store_mod.load_review_panel
 list_review_panels = store_mod.list_review_panels
+get_review_panel_detail = store_mod.get_review_panel_detail
 
 # 尝试加载 chat_ui（已被 gradio mock 保护）
 _chat_ui_loaded = False
@@ -352,6 +354,40 @@ class ReviewDatabaseTest(unittest.TestCase):
     def test_list_panels_returns_empty_when_no_data(self):
         panels = list_review_panels()
         self.assertEqual([], panels)
+
+    def test_get_review_panel_detail_returns_full_data(self):
+        verdict = _make_verdict(
+            overall=65,
+            passed=False,
+            scores={"gongzhonghao": 70, "xiaohongshu": 60},
+            suggestions=["公众号开头太平淡", "小红书emoji不够"],
+        )
+        panel = ReviewManager.create_panel(verdict, threshold=75)
+        panel.platforms = ["gongzhonghao", "xiaohongshu"]
+        save_review_panel(panel, "detail-task-001")
+
+        # 先列出获取 panel_id
+        panels = list_review_panels()
+        self.assertEqual(1, len(panels))
+        panel_id = panels[0]["id"]
+
+        detail = get_review_panel_detail(panel_id)
+        self.assertIsNotNone(detail)
+        self.assertEqual("detail-task-001", detail["task_id"])
+        self.assertEqual(65, detail["overall"])
+        self.assertEqual(75, detail["threshold"])
+        self.assertFalse(detail["passed"])
+        self.assertEqual(2, len(detail["items"]))
+
+        # 按分数从低到高排序
+        self.assertEqual("小红书", detail["items"][0]["dimension"])
+        self.assertEqual(60, detail["items"][0]["score"])
+        self.assertEqual("公众号", detail["items"][1]["dimension"])
+        self.assertEqual(70, detail["items"][1]["score"])
+
+    def test_get_review_panel_detail_returns_none_for_invalid_id(self):
+        detail = get_review_panel_detail(99999)
+        self.assertIsNone(detail)
 
 
 @unittest.skipUnless(_chat_ui_loaded, "chat_ui 依赖未就绪，跳过集成测试")

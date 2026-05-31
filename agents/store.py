@@ -894,3 +894,41 @@ def list_review_panels(limit: int = 50) -> List[dict]:
             "created_at": r["created_at"],
         })
     return result
+
+
+def get_review_panel_detail(panel_id: int) -> Optional[dict]:
+    """根据 panel_id 查询审核面板详情，包含所有评分项"""
+    conn = _get_conn()
+    row = conn.execute("SELECT * FROM review_panels WHERE id = ?", (panel_id,)).fetchone()
+    if row is None:
+        conn.close()
+        return None
+
+    items_rows = conn.execute(
+        "SELECT * FROM review_items WHERE panel_id = ? ORDER BY score ASC", (panel_id,)
+    ).fetchall()
+    conn.close()
+
+    items = []
+    for r in items_rows:
+        items.append({
+            "dimension": r["dimension"],
+            "score": r["score"],
+            "threshold": r["threshold"],
+            "passed": bool(r["passed"]),
+            "suggestion": r["suggestion"] or "",
+            "ignored": bool(r["ignored"]),
+        })
+
+    return {
+        "id": row["id"],
+        "task_id": row["task_id"],
+        "overall": row["overall"],
+        "threshold": row["threshold"],
+        "passed": bool(row["passed"]),
+        "verdict_text": row["verdict_text"] or "",
+        "user_decision": row["user_decision"],
+        "revision_prompt": row["revision_prompt"] or "",
+        "created_at": row["created_at"],
+        "items": items,
+    }
