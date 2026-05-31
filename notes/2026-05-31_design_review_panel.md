@@ -77,6 +77,8 @@ def plan_and_execute(..., enable_review_panel: bool = False):
 
 3. **系统环境被污染** — 运行 pip install 时忘了 `source .venv/bin/activate`，把大量包装到了 `/Users/lee/Library/Python/3.9/。解决方案：`pip uninstall -y` 清理后，以后先激活虚拟环境再操作。
 
+4. **Docker 依赖缺失** — `requirements-docker.txt` 缺少 `chromadb` 和 `sentence-transformers`，导致 Docker 运行时 RAG 相关导入失败。解决方案：补充 `chromadb==1.5.9` 和 `sentence-transformers==5.1.2`。
+
 ## 使用方法
 
 ```bash
