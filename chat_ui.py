@@ -1449,6 +1449,23 @@ def create_chat_ui():
                 return
 
             panel = panel_data
+            from agents.review import MAX_REVISION_ATTEMPTS
+
+            # 检查是否还能采纳修改
+            if not panel.can_revise():
+                chat_history.append({"role": "assistant", "content": f"⚠️ 已达最大修改次数限制（{MAX_REVISION_ATTEMPTS} 次）。\n\n请选择【忽略未通过项】或【强行发布】。"})
+                yield (
+                    "",
+                    _copy_chat_history(chat_history),
+                    "",
+                    *_download_button_updates([]),
+                    gr.update(value="", visible=False),
+                    gr.update(visible=False),
+                    panel,
+                )
+                return
+
+            panel.revision_count += 1
             revision_prompt = panel.get_revision_prompt()
 
             # 从聊天记录中提取用户原始需求
@@ -1458,7 +1475,7 @@ def create_chat_ui():
                     original_message = msg.get("content", "")
                     break
 
-            revised_message = f"{original_message}\n\n【系统：根据以下修改意见重新生成】\n{revision_prompt}"
+            revised_message = f"{original_message}\n\n【系统：根据以下修改意见重新生成，第 {panel.revision_count}/{MAX_REVISION_ATTEMPTS} 次修改】\n{revision_prompt}"
 
             # 先隐藏审核面板
             yield (
@@ -1468,7 +1485,7 @@ def create_chat_ui():
                 *_download_button_updates([]),
                 gr.update(value="", visible=False),
                 gr.update(visible=False),
-                None,
+                panel,
             )
 
             # 自动携带修改意见重新生成

@@ -250,6 +250,51 @@ class ReviewPanelTest(unittest.TestCase):
         self.assertNotIn("a开头太平淡", prompt)
         self.assertIn("bemoji不够", prompt)
 
+    def test_can_revise_respects_limit(self):
+        """can_revise 在达到最大重试次数后返回 False"""
+        panel = ReviewPanel(
+            overall=60,
+            threshold=75,
+            passed=False,
+            items=[ReviewItem(dimension="口语化", score=55, threshold=75, passed=False, suggestion="添加口语化表达")],
+            verdict_text="需修改",
+        )
+        self.assertTrue(panel.can_revise())  # 0 < 2
+        panel.revision_count = 1
+        self.assertTrue(panel.can_revise())  # 1 < 2
+        panel.revision_count = 2
+        self.assertFalse(panel.can_revise())  # 2 >= 2
+        panel.revision_count = 3
+        self.assertFalse(panel.can_revise())  # 3 >= 2
+
+    def test_to_markdown_shows_revision_count(self):
+        """to_markdown 在有重试次数时显示剩余次数"""
+        panel = ReviewPanel(
+            overall=60,
+            threshold=75,
+            passed=False,
+            items=[ReviewItem(dimension="口语化", score=55, threshold=75, passed=False, suggestion="添加口语化表达")],
+            verdict_text="需修改",
+            revision_count=1,
+        )
+        md = panel.to_markdown()
+        self.assertIn("已重试", md)
+        self.assertIn("1/2", md)
+        self.assertIn("剩余 1 次", md)
+
+    def test_to_markdown_no_revision_count_when_zero(self):
+        """to_markdown 在重试次数为 0 时不显示重试信息"""
+        panel = ReviewPanel(
+            overall=60,
+            threshold=75,
+            passed=False,
+            items=[ReviewItem(dimension="口语化", score=55, threshold=75, passed=False, suggestion="添加口语化表达")],
+            verdict_text="需修改",
+            revision_count=0,
+        )
+        md = panel.to_markdown()
+        self.assertNotIn("已重试", md)
+
 
 class ReviewDatabaseTest(unittest.TestCase):
     """测试 review 相关的数据库操作。"""

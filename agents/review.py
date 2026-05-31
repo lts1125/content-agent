@@ -53,6 +53,7 @@ class ReviewPanel:
     revision_prompt: str = ""
     raw_content: Optional[object] = None  # 原始生成内容（WriterOutput）
     platforms: List[str] = field(default_factory=list)
+    revision_count: int = 0               # 已采纳修改并重新生成的次数
 
     @property
     def effective_score(self) -> int:
@@ -78,6 +79,10 @@ class ReviewPanel:
         """是否还能继续忽略"""
         return self.ignored_count < MAX_IGNORE_ITEMS
 
+    def can_revise(self) -> bool:
+        """是否还能采纳修改并重新生成"""
+        return self.revision_count < MAX_REVISION_ATTEMPTS
+
     def get_revision_prompt(self) -> str:
         """生成修改指令"""
         failed_items = [i for i in self.items if not i.passed and not i.ignored]
@@ -95,10 +100,15 @@ class ReviewPanel:
             "## 🔍 质量检查报告",
             "",
             f"整体得分: **{self.overall}/100** {status_icon} {'已达标' if self.passed else '未达标'}",
-            "",
+        ]
+        if self.revision_count > 0:
+            remaining = MAX_REVISION_ATTEMPTS - self.revision_count
+            lines.append(f"🔄 已重试 {self.revision_count}/{MAX_REVISION_ATTEMPTS} 次，剩余 {remaining} 次")
+        lines.append("")
+        lines.extend([
             "| 维度 | 得分 | 状态 | 建议 |",
             "|-------|------|------|--------|",
-        ]
+        ])
         for item in self.items:
             icon = "✅" if item.passed else "❌"
             note = "（已忽略）" if item.ignored else ""
