@@ -9,4 +9,6 @@ python-docx
 watchdog
 apscheduler
 pyyaml
+chromadb==1.5.9
+sentence-transformers==5.1.2
 numpy
