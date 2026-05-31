@@ -15,7 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
-_SCHEMA_VERSION = 4
+_SCHEMA_VERSION = 5
 
 
 def _ensure_db():
@@ -265,6 +265,51 @@ def init_eval_results_table():
     conn.close()
 
 
+def init_conversation_turns_table():
+    """记忆系统: 会话历史表"""
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_turns (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT    NOT NULL,
+            role        TEXT    NOT NULL,
+            content     TEXT    NOT NULL,
+            platforms   TEXT,
+            files       TEXT,
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+            task_id     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_conv_session ON conversation_turns(session_id);
+        CREATE INDEX IF NOT EXISTS idx_conv_created ON conversation_turns(created_at);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def init_user_preferences_table():
+    """记忆系统: 用户偏好表"""
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id          TEXT    NOT NULL DEFAULT 'default',
+            pref_key         TEXT    NOT NULL,
+            pref_value       TEXT    NOT NULL,
+            source           TEXT,
+            confidence       REAL    DEFAULT 0.5,
+            created_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+            updated_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, pref_key)
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def migrate_tasks_add_trace():
     """tasks 表增加 trace 字段（执行轨迹持久化）"""
     if not _column_exists("tasks", "trace"):
@@ -337,6 +382,8 @@ def init_db():
     init_ab_test_variants_table()
     init_eval_results_table()
     migrate_tasks_add_trace()  # P0: 执行轨迹持久化
+    init_conversation_turns_table()  # 记忆系统: 会话历史
+    init_user_preferences_table()    # 记忆系统: 用户偏好
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)
@@ -521,3 +568,151 @@ def delete_task(task_id: str) -> bool:
     conn.commit()
     conn.close()
     return cur.rowcount > 0
+
+
+# ---- 记忆系统 CRUD ----
+
+def save_conversation_turn(
+    session_id: str,
+    role: str,
+    content: str,
+    platforms: Optional[List[str]] = None,
+    files: Optional[List[str]] = None,
+    task_id: Optional[str] = None,
+) -> int:
+    """保存一轮会话，返回自增 ID"""
+    conn = _get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO conversation_turns (session_id, role, content, platforms, files, task_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        """,
+        (
+            session_id,
+            role,
+            content,
+            json.dumps(platforms, ensure_ascii=False) if platforms else None,
+            json.dumps(files, ensure_ascii=False) if files else None,
+            task_id,
+        ),
+    )
+    conn.commit()
+    row_id = cur.lastrowid or 0
+    conn.close()
+    return row_id
+
+
+def get_conversation_turns(session_id: str, limit: int = 100) -> list:
+    """获取指定会话的历史轮次"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM conversation_turns WHERE session_id = ? ORDER BY id ASC LIMIT ?",
+        (session_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def list_sessions(limit: int = 20) -> list:
+    """列出最近有活动的会话"""
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT session_id,
+               MAX(created_at) as last_active,
+               COUNT(*) as turn_count
+        FROM conversation_turns
+        GROUP BY session_id
+        ORDER BY last_active DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def clear_session(session_id: str) -> int:
+    """清除指定会话，返回删除行数"""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM conversation_turns WHERE session_id = ?", (session_id,))
+    conn.commit()
+    rowcount = cur.rowcount
+    conn.close()
+    return rowcount
+
+
+def clear_old_sessions(days: int = 30) -> int:
+    """清理 N 天前的会话，返回删除行数"""
+    conn = _get_conn()
+    cur = conn.execute(
+        "DELETE FROM conversation_turns WHERE created_at < datetime('now', '-{} days')".format(days)
+    )
+    conn.commit()
+    rowcount = cur.rowcount
+    conn.close()
+    return rowcount
+
+
+def set_user_preference(
+    user_id: str,
+    pref_key: str,
+    pref_value,
+    source: str = "explicit",
+    confidence: float = 1.0,
+) -> None:
+    """设置用户偏好"""
+    conn = _get_conn()
+    conn.execute(
+        """
+        INSERT INTO user_preferences (user_id, pref_key, pref_value, source, confidence, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(user_id, pref_key) DO UPDATE SET
+            pref_value=excluded.pref_value,
+            source=excluded.source,
+            confidence=excluded.confidence,
+            updated_at=datetime('now')
+        """,
+        (
+            user_id,
+            pref_key,
+            json.dumps(pref_value, ensure_ascii=False),
+            source,
+            confidence,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_user_preference(user_id: str, pref_key: str, default=None):
+    """获取单个偏好"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT pref_value FROM user_preferences WHERE user_id = ? AND pref_key = ?",
+        (user_id, pref_key),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return default
+    try:
+        return json.loads(row["pref_value"])
+    except json.JSONDecodeError:
+        return row["pref_value"]
+
+
+def get_user_preferences(user_id: str = "default") -> dict:
+    """获取用户全部偏好"""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT pref_key, pref_value FROM user_preferences WHERE user_id = ?",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+    prefs = {}
+    for r in rows:
+        try:
+            prefs[r["pref_key"]] = json.loads(r["pref_value"])
+        except json.JSONDecodeError:
+            prefs[r["pref_key"]] = r["pref_value"]
+    return prefs

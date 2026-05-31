@@ -20,8 +20,10 @@ import re
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 # 调试日志
 _LOG_PATH = os.getenv(
@@ -48,6 +50,7 @@ except OSError:
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 logger = logging.getLogger("chat_ui")
+
 logger.info("=== chat_ui 初始化开始 ===")
 
 from dotenv import load_dotenv
@@ -62,7 +65,6 @@ except ImportError as e:
 
 
 def _patch_gradio_api_info_for_compatibility():
-    """Avoid Gradio 4 API schema crashes with newer dependency combinations."""
     if getattr(gr.Blocks, "_content_agent_api_info_patched", False):
         return
 
@@ -137,6 +139,8 @@ _patch_starlette_template_response()
 from agents.tools import execute_tool
 from agents.planning import StrategySelector, AutonomousPlanner
 from agents.schemas import WriterOutput
+from agents.memory import MemoryManager
+from agents.store import init_db
 from content_agent.html_renderer import XiaohongshuRenderer
 
 
@@ -503,6 +507,13 @@ class ChatAgent:
         self.selector = StrategySelector()
         self.planner = AutonomousPlanner()
         self.history = []
+        self.memory = MemoryManager()
+        self.session_id = str(uuid.uuid4())
+    
+    def reset_session(self):
+        """重置会话，保留旧会话历史"""
+        self.session_id = str(uuid.uuid4())
+        self.history = []
     
     def process_message(self, user_message: str) -> dict:
         """
@@ -539,6 +550,16 @@ class ChatAgent:
         """处理用户消息，并产出可用于 UI 的进度事件。"""
         logger.info(f"用户消息: {user_message}")
 
+        # 1. 保存用户消息到短期记忆
+        self.memory.save_turn(self.session_id, "user", user_message)
+
+        # 2. 处理系统命令
+        sys_result = self._handle_system_command(user_message)
+        if sys_result:
+            self.memory.save_turn(self.session_id, "assistant", sys_result.get("content", ""))
+            yield {"type": "result", "result": sys_result}
+            return
+
         yield {
             "type": "progress",
             "event": {
@@ -566,19 +587,25 @@ class ChatAgent:
             return
 
         if intent["type"] == "help":
-            yield {"type": "result", "result": self._handle_help()}
+            result = self._handle_help()
+            self.memory.save_turn(self.session_id, "assistant", result.get("content", ""))
+            yield {"type": "result", "result": result}
             return
 
         if intent["type"] == "status":
-            yield {"type": "result", "result": self._handle_status()}
+            result = self._handle_status()
+            self.memory.save_turn(self.session_id, "assistant", result.get("content", ""))
+            yield {"type": "result", "result": result}
             return
 
+        fallback = {
+            "type": "text",
+            "content": "我不太理解你的需求。你可以说：\n- '帮我写一篇关于XXX的公众号文章'\n- '生成小红书笔记：程序员健身指南'\n- '把这篇笔记改写成抖音文案'",
+        }
+        self.memory.save_turn(self.session_id, "assistant", fallback["content"])
         yield {
             "type": "result",
-            "result": {
-                "type": "text",
-                "content": "我不太理解你的需求。你可以说：\n- '帮我写一篇关于XXX的公众号文章'\n- '生成小红书笔记：程序员健身指南'\n- '把这篇笔记改写成抖音文案'",
-            },
+            "result": fallback,
         }
     
     def _analyze_intent(self, message: str) -> dict:
@@ -738,6 +765,11 @@ class ChatAgent:
                 },
             }
 
+            # 注入记忆上下文
+            memory_context = self._build_memory_context(topic)
+            if memory_context:
+                raw_notes = f"{raw_notes}\n\n{memory_context}"
+
             progress_queue = queue.Queue()
             result_holder = {}
 
@@ -812,6 +844,13 @@ class ChatAgent:
                     "detail": f"已保存 {len(files)} 个文件",
                 },
             }
+
+            # 保存 assistant 回复到短期记忆
+            self.memory.save_turn(
+                self.session_id, "assistant", output_text,
+                platforms=platforms, files=files,
+            )
+
             yield {
                 "type": "result",
                 "result": {
@@ -823,11 +862,13 @@ class ChatAgent:
             }
         except Exception as e:
             logger.error(f"生成失败: {e}", exc_info=True)
+            error_text = f"生成失败: {str(e)}"
+            self.memory.save_turn(self.session_id, "assistant", error_text)
             yield {
                 "type": "result",
                 "result": {
                     "type": "error",
-                    "content": f"生成失败: {str(e)}",
+                    "content": error_text,
                 },
             }
     
@@ -884,6 +925,125 @@ class ChatAgent:
 """,
         }
 
+    def _handle_system_command(self, message: str) -> Optional[dict]:
+        """处理系统命令，以 #! 开头。
+
+        支持的命令：
+        - #!index [path] — 手动索引 Vault 或单个文件
+        - #!search <query> — 测试向量检索
+        - #!prefs — 查看当前用户偏好
+        - #!sessions — 列出近期会话
+        - #!memory — 查看向量库状态
+        """
+        msg = message.strip()
+        if not msg.startswith("#!"):
+            return None
+
+        parts = msg[2:].strip().split(maxsplit=1)
+        cmd = parts[0].lower() if parts else ""
+        arg = parts[1] if len(parts) > 1 else ""
+
+        if cmd == "index":
+            path = arg or os.getenv("VAULT_PATH", str(Path.home() / ".content_agent" / "vault"))
+            count = self.memory.index_note(path)
+            return {
+                "type": "text",
+                "content": f"📚 索引完成：共索引了 {count} 个 chunk\n路径: {path}",
+            }
+
+        if cmd == "search":
+            if not arg:
+                return {"type": "text", "content": "❌ 请提供检索词，例如: #!search MCP 协议"}
+            results = self.memory.search_notes(arg, top_k=5)
+            if not results:
+                return {"type": "text", "content": f"🔍 未找到与“{arg}”相关的笔记"}
+            lines = [f"🔍 检索结果：{arg}", ""]
+            for r in results:
+                lines.append(f"**{r.title}** ({r.source})")
+                lines.append(f"{r.text[:200]}...")
+                lines.append("")
+            return {"type": "text", "content": "\n".join(lines)}
+
+        if cmd == "prefs":
+            prefs = self.memory.get_preferences()
+            if not prefs:
+                return {"type": "text", "content": "📝 当前没有设置偏好"}
+            lines = ["📝 用户偏好", ""]
+            for k, v in prefs.items():
+                lines.append(f"- **{k}**: {v}")
+            return {"type": "text", "content": "\n".join(lines)}
+
+        if cmd == "sessions":
+            sessions = self.memory.list_sessions(limit=10)
+            if not sessions:
+                return {"type": "text", "content": "📅 暂无会话记录"}
+            lines = ["📅 近期会话", ""]
+            for s in sessions:
+                sid = s["session_id"][:8]
+                lines.append(f"- `{sid}...` — {s['turn_count']} 轮 — {s['last_active']}")
+            return {"type": "text", "content": "\n".join(lines)}
+
+        if cmd == "memory":
+            stats = self.memory.get_index_stats()
+            return {
+                "type": "text",
+                "content": f"🧠 记忆状态\n- 向量库: {stats['status']} (共 {stats['count']} 条)",
+            }
+
+        if cmd == "help" or cmd == "":
+            return {
+                "type": "text",
+                "content": """**系统命令**
+
+- `#!index [path]` — 索引 Vault 目录或单个文件
+- `#!search <query>` — 向量检索笔记
+- `#!prefs` — 查看用户偏好
+- `#!sessions` — 列出近期会话
+- `#!memory` — 查看向量库状态
+""",
+            }
+
+        return None
+
+    def _build_memory_context(self, topic: str) -> str:
+        """构建记忆上下文：包含用户偏好和相关笔记检索结果。
+
+        返回空字符串表示没有可用的记忆上下文。
+        """
+        parts = []
+
+        # 1. 用户偏好
+        prefs = self.memory.get_preferences()
+        if prefs:
+            pref_lines = []
+            tone = prefs.get("preferred_tone")
+            if tone:
+                pref_lines.append(f"风格: {tone}")
+            platforms = prefs.get("favorite_platforms")
+            if platforms:
+                pref_lines.append(f"常用平台: {', '.join(platforms)}")
+            length = prefs.get("preferred_length")
+            if length:
+                pref_lines.append(f"长度偏好: {length}")
+            custom = prefs.get("custom_prompt")
+            if custom:
+                pref_lines.append(f"自定义要求: {custom}")
+            if pref_lines:
+                parts.append("## 用户偏好\n" + "\n".join(f"- {l}" for l in pref_lines))
+
+        # 2. 向量检索相关笔记
+        try:
+            notes = self.memory.search_notes(topic, top_k=3, min_score=0.4)
+            if notes:
+                note_lines = []
+                for n in notes:
+                    note_lines.append(f"- **{n.title}** ({n.source}): {n.text[:150]}...")
+                parts.append("## 相关笔记参考\n" + "\n".join(note_lines))
+        except Exception as e:
+            logger.warning(f"向量检索失败: {e}")
+
+        return "\n\n".join(parts)
+
 
 # ==================== Gradio 界面 ====================
 
@@ -899,11 +1059,21 @@ def _respond_stream(agent, message, chat_history, note_file=None):
     chat_history.append({"role": "user", "content": display_message})
 
     try:
-        process_message = (
-            _merge_uploaded_note_with_message(message, note_file)
-            if note_file
-            else message
-        )
+        # 检查原始消息是否是系统命令，上传笔记时不应干扰命令执行
+        is_system_cmd = message.strip().startswith("#!")
+        if note_file and not is_system_cmd:
+            process_message = _merge_uploaded_note_with_message(message, note_file)
+            # 用户上传笔记后自动索引到向量库
+            try:
+                note_path = _uploaded_file_path(note_file)
+                if note_path:
+                    indexed = agent.memory.index_note(str(note_path))
+                    if indexed > 0:
+                        logger.info(f"自动索引上传笔记: {note_path}, {indexed} chunks")
+            except Exception as e:
+                logger.warning(f"上传笔记自动索引失败: {e}")
+        else:
+            process_message = message
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
         yield "", _copy_chat_history(chat_history), "", *_download_button_updates([]), gr.update(value="", visible=False)
@@ -959,6 +1129,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
 
 def create_chat_ui():
     """创建聊天界面"""
+    init_db()  # 确保数据库表已创建
     agent = ChatAgent()
 
     def respond(message, chat_history, note_file=None):
@@ -967,7 +1138,7 @@ def create_chat_ui():
     
     def clear_history():
         """清空历史"""
-        agent.history = []
+        agent.reset_session()
         return [], "", *_download_button_updates([]), gr.update(value="", visible=False)
     
     def publish_gzh(cover_image, gzh_file_path):
