@@ -172,11 +172,13 @@ class ContentEvaluator:
                 """
                 INSERT INTO eval_results (
                     id, task_id, platform, content_hash,
-                    relevance_score, readability_score, originality_score, practicality_score, overall_score,
-                    word_count, has_sensitive_words, has_link,
-                    prompt_tokens, completion_tokens, latency_ms,
+                    relevance_score, readability_score, originality_score, practicality_score,
+                    platform_fit_score, trend_match_score, overall_score,
+                    word_count, char_count, paragraph_count, emoji_count, tag_count,
+                    has_sensitive_words, has_link,
+                    prompt_tokens, completion_tokens, latency_ms, eval_latency_ms,
                     model, eval_model, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                 """,
                 (
                     result["id"],
@@ -187,13 +189,20 @@ class ContentEvaluator:
                     result["readability_score"],
                     result["originality_score"],
                     result["practicality_score"],
+                    result.get("platform_fit_score", 0),
+                    result.get("trend_match_score", 0),
                     result["overall_score"],
                     result["word_count"],
+                    result.get("char_count", 0),
+                    result.get("paragraph_count", 0),
+                    result.get("emoji_count", 0),
+                    result.get("tag_count", 0),
                     result["has_sensitive_words"],
                     result["has_link"],
                     result["prompt_tokens"],
                     result["completion_tokens"],
                     result["latency_ms"],
+                    result.get("eval_latency_ms", 0),
                     result["model"],
                     result["eval_model"],
                 ),

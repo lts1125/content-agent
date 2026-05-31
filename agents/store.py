@@ -29,6 +29,15 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    """检查并添加表列（如果不存在），用于旧表升级"""
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+    except sqlite3.OperationalError:
+        # 列已存在，忽略
+        pass
+
+
 def _get_schema_version() -> int:
     conn = _get_conn()
     try:
@@ -261,6 +270,14 @@ def init_eval_results_table():
         CREATE INDEX IF NOT EXISTS idx_eval_created ON eval_results(created_at);
         """
     )
+    # 补充旧表缺失的列（SQLite 支持 ALTER TABLE ADD COLUMN）
+    _ensure_column(conn, "eval_results", "platform_fit_score", "INTEGER")
+    _ensure_column(conn, "eval_results", "trend_match_score", "INTEGER")
+    _ensure_column(conn, "eval_results", "char_count", "INTEGER")
+    _ensure_column(conn, "eval_results", "paragraph_count", "INTEGER")
+    _ensure_column(conn, "eval_results", "emoji_count", "INTEGER")
+    _ensure_column(conn, "eval_results", "tag_count", "INTEGER")
+    _ensure_column(conn, "eval_results", "eval_latency_ms", "INTEGER")
     conn.commit()
     conn.close()
 
@@ -932,3 +949,90 @@ def get_review_panel_detail(panel_id: int) -> Optional[dict]:
         "created_at": row["created_at"],
         "items": items,
     }
+
+
+def get_recent_eval_results(days: int = 30, limit: int = 500) -> List[dict]:
+    """获取最近 N 天的评估结果，按时间倒序"""
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT * FROM eval_results
+        WHERE created_at >= datetime('now', '-{} days')
+        ORDER BY created_at DESC
+        LIMIT ?
+        """.format(days),
+        (limit,),
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        result.append({
+            "id": r["id"],
+            "task_id": r["task_id"],
+            "platform": r["platform"],
+            "overall_score": r["overall_score"],
+            "relevance_score": r["relevance_score"],
+            "readability_score": r["readability_score"],
+            "originality_score": r["originality_score"],
+            "practicality_score": r["practicality_score"],
+            "platform_fit_score": r["platform_fit_score"],
+            "trend_match_score": r["trend_match_score"],
+            "word_count": r["word_count"],
+            "char_count": r["char_count"],
+            "paragraph_count": r["paragraph_count"],
+            "emoji_count": r["emoji_count"],
+            "tag_count": r["tag_count"],
+            "has_sensitive_words": bool(r["has_sensitive_words"]),
+            "has_link": bool(r["has_link"]),
+            "created_at": r["created_at"],
+        })
+    return result
+
+
+def get_eval_stats_by_platform(days: int = 30) -> List[dict]:
+    """按平台分组统计评估结果"""
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT
+            platform,
+            COUNT(*) as sample_count,
+            AVG(overall_score) as avg_overall,
+            AVG(word_count) as avg_word_count,
+            AVG(char_count) as avg_char_count,
+            AVG(paragraph_count) as avg_paragraph_count,
+            AVG(emoji_count) as avg_emoji_count,
+            AVG(tag_count) as avg_tag_count,
+            AVG(relevance_score) as avg_relevance,
+            AVG(readability_score) as avg_readability,
+            AVG(originality_score) as avg_originality,
+            AVG(practicality_score) as avg_practicality,
+            AVG(platform_fit_score) as avg_platform_fit,
+            AVG(trend_match_score) as avg_trend_match
+        FROM eval_results
+        WHERE created_at >= datetime('now', '-{} days')
+        GROUP BY platform
+        """.format(days),
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        result.append({
+            "platform": r["platform"],
+            "sample_count": r["sample_count"],
+            "avg_overall": r["avg_overall"] or 0,
+            "avg_word_count": r["avg_word_count"] or 0,
+            "avg_char_count": r["avg_char_count"] or 0,
+            "avg_paragraph_count": r["avg_paragraph_count"] or 0,
+            "avg_emoji_count": r["avg_emoji_count"] or 0,
+            "avg_tag_count": r["avg_tag_count"] or 0,
+            "avg_relevance": r["avg_relevance"] or 0,
+            "avg_readability": r["avg_readability"] or 0,
+            "avg_originality": r["avg_originality"] or 0,
+            "avg_practicality": r["avg_practicality"] or 0,
+            "avg_platform_fit": r["avg_platform_fit"] or 0,
+            "avg_trend_match": r["avg_trend_match"] or 0,
+        })
+    return result
