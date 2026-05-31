@@ -84,8 +84,27 @@ source .venv/bin/activate
 python tests/test_review_panel.py -v
 ```
 
-当前测试状态：16 个测试全部通过，0 跳过。
+当前测试状态：18 个测试全部通过，0 跳过。
+
+## 历史记录查询
+
+### 实现
+
+新增 `review_history.py` CLI 工具，支持三个子命令：
+
+```bash
+source .venv/bin/activate
+python review_history.py list          # 列出最近20条
+python review_history.py show <id>     # 查看详情
+python review_history.py stats         # 统计概览
+```
+
+输出格式为 Markdown 表格，可直接复制到笔记。
+
+### 数据库扩展
+
+`agents/store.py` 新增 `get_review_panel_detail(panel_id)` 函数，返回包含所有评分项的完整记录。
 
 ## 下一步
 
-- [ ] 历史审核记录查询/展示入口
+- [ ] 考虑是否把历史记录查询集成到 chat_ui 的某个 Tab 或 Accordion 中
