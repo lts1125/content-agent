@@ -126,6 +126,8 @@ class ChatProgressTest(unittest.TestCase):
                 "platforms": '["gongzhonghao"]',
                 "files": '["output/chat/20260601_150000/gongzhonghao.md"]',
                 "created_at": "2026-06-01 15:00:00",
+                "publish_status": "draft_saved",
+                "publish_message": "已保存到草稿箱",
             }
         ]
 
@@ -136,6 +138,7 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("history-task-card", message)
         self.assertIn("history-card-command", message)
         self.assertIn("修改 task chat_20260601_150000，把开头写得更抓人", message)
+        self.assertIn("已保存草稿", message)
         self.assertIn("公众号", message)
         self.assertIn("chat_20260601_150000", message)
         self.assertIn("gongzhonghao.md", message)
@@ -144,6 +147,31 @@ class ChatProgressTest(unittest.TestCase):
         message = chat_ui._format_generated_history([])
 
         self.assertIn("暂无生成历史", message)
+
+    def test_format_generated_history_shows_publish_failure_detail_once(self):
+        items = [
+            {
+                "session_id": "session_abcdef",
+                "task_id": "chat_20260601_150000",
+                "platforms": '["gongzhonghao"]',
+                "files": '["output/chat/20260601_150000/gongzhonghao.md"]',
+                "created_at": "2026-06-01 15:00:00",
+                "publish_status": "failed",
+                "publish_message": "发布失败",
+                "publish_details": "错误：无法连接到服务器",
+            }
+        ]
+
+        message = chat_ui._format_generated_history(items)
+
+        self.assertIn("发布失败", message)
+        self.assertIn("错误：无法连接到服务器", message)
+        self.assertEqual(1, message.count("发布失败"))
+
+    def test_extract_task_id_from_gongzhonghao_file(self):
+        task_id = chat_ui._task_id_from_generated_file("output/chat/20260601_150000/gongzhonghao.md")
+
+        self.assertEqual("chat_20260601_150000", task_id)
 
 
 class ChatIntentTest(unittest.TestCase):
@@ -193,6 +221,46 @@ class ChatIntentTest(unittest.TestCase):
 
     def test_generic_optimization_topic_is_not_revision_request(self):
         self.assertFalse(chat_ui._is_revision_request("帮我写一篇关于如何优化 Python 性能的公众号文章"))
+
+    def test_target_platform_marker_overrides_revision_suggestions(self):
+        platforms = chat_ui._detect_requested_platforms(
+            "【目标平台】gongzhonghao\n\n[小红书] 标题缺少 emoji\n[抖音] 缺少画面提示"
+        )
+
+        self.assertEqual(["gongzhonghao"], platforms)
+
+    def test_review_revision_message_keeps_previous_platform_content(self):
+        panel = type(
+            "Panel",
+            (),
+            {
+                "platforms": ["gongzhonghao"],
+                "raw_content": type(
+                    "Content",
+                    (),
+                    {
+                        "gongzhonghao": "# 上一版公众号\n\n正文",
+                        "xiaohongshu": "小红书内容不应作为目标",
+                        "douyin": "抖音内容不应作为目标",
+                    },
+                )(),
+                "revision_count": 1,
+                "get_revision_prompt": lambda self: "[小红书] 标题缺少 emoji\n[公众号] 开头不够抓人",
+            },
+        )()
+
+        message = chat_ui._build_review_revision_message(
+            panel,
+            [{"role": "user", "content": "根据这篇笔记内容生成公众号文章\n\n📚 记忆索引：已新增 20 个笔记片段。"}],
+            max_attempts=2,
+        )
+
+        self.assertIn("【目标平台】gongzhonghao", message)
+        self.assertIn("【上一版公众号】", message)
+        self.assertIn("# 上一版公众号", message)
+        self.assertIn("[公众号] 开头不够抓人", message)
+        self.assertNotIn("[小红书] 标题缺少 emoji", message)
+        self.assertNotIn("记忆索引", message)
 
     def test_extracts_writing_requirements_from_user_request(self):
         intent = chat_ui.ChatAgent()._analyze_intent(

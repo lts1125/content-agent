@@ -124,6 +124,41 @@ def test_indexed_note_registry():
     print("✅ 笔记索引去重注册表正常")
 
 
+def test_publish_status_joins_generated_history():
+    """验证公众号草稿箱发布状态能回显到生成历史"""
+    print("\n【测试2.3】测试发布状态回写历史...")
+    sid = "test_publish_status_history"
+    task_id = "chat_20260601_170000"
+    store.clear_session(sid)
+    store.delete_publish_status(task_id, "gongzhonghao")
+
+    store.save_conversation_turn(
+        sid,
+        "assistant",
+        "已生成公众号文章",
+        platforms=["gongzhonghao"],
+        files=["output/chat/20260601_170000/gongzhonghao.md"],
+        task_id=task_id,
+    )
+    store.save_publish_status(
+        task_id=task_id,
+        platform="gongzhonghao",
+        status="draft_saved",
+        message="已保存到草稿箱",
+        details="ok",
+    )
+
+    items = store.list_generated_turns(limit=10)
+    matched = [i for i in items if i["task_id"] == task_id]
+    assert len(matched) == 1, f"期望 1 条发布状态历史，实际 {len(matched)} 条"
+    assert matched[0]["publish_status"] == "draft_saved"
+    assert matched[0]["publish_message"] == "已保存到草稿箱"
+
+    store.delete_publish_status(task_id, "gongzhonghao")
+    store.clear_session(sid)
+    print("✅ 发布状态回写历史正常")
+
+
 def test_user_preferences():
     """验证用户偏好 CRUD"""
     print("\n【测试3】测试用户偏好...")
@@ -262,6 +297,7 @@ def main():
         test_conversation_turns()
         test_generated_history()
         test_indexed_note_registry()
+        test_publish_status_joins_generated_history()
         test_user_preferences()
         test_memory_manager_without_vector()
         test_memory_manager_skips_duplicate_note_content()

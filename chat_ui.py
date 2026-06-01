@@ -140,7 +140,7 @@ from agents.tools import execute_tool
 from agents.planning import StrategySelector, AutonomousPlanner
 from agents.schemas import WriterOutput
 from agents.memory import MemoryManager
-from agents.store import init_db
+from agents.store import init_db, save_publish_status
 from content_agent.html_renderer import XiaohongshuRenderer
 
 
@@ -363,6 +363,9 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         platforms = _safe_json_load(item.get("platforms"), [])
         files = _safe_json_load(item.get("files"), [])
         labels = "、".join(PLATFORM_LABELS.get(p, p) for p in platforms) or "未知平台"
+        publish_status = item.get("publish_status") or ""
+        publish_message = item.get("publish_message") or ""
+        publish_details = item.get("publish_details") or ""
         main_file = next((f for f in files if "gongzhonghao" in f and f.endswith(".md")), None)
         if main_file is None and files:
             main_file = files[0]
@@ -372,12 +375,33 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         lines.append(f'<div class="history-card-row"><span>task</span><code>{task_id}</code></div>')
         if main_file:
             lines.append(f'<div class="history-card-row"><span>文件</span><code>{main_file}</code></div>')
+        if publish_status:
+            status_label = {
+                "draft_saved": "已保存草稿",
+                "failed": "发布失败",
+            }.get(publish_status, publish_status)
+            status_text = status_label
+            if publish_message and publish_message != status_label:
+                status_text += f" · {publish_message}"
+            lines.append(f'<div class="history-card-row"><span>发布</span><code>{status_text}</code></div>')
+            if publish_details:
+                lines.append(f'<div class="history-card-row"><span>原因</span><code>{publish_details}</code></div>')
         if task_id and task_id != "-":
             lines.append(f'<div class="history-card-command"><span>继续改</span><code>修改 task {task_id}，把开头写得更抓人</code></div>')
             lines.append(f'<div class="history-card-command"><span>通俗化</span><code>基于 task {task_id} 改得更通俗一点</code></div>')
         lines.append("</div>")
         lines.append("")
     return "\n".join(lines)
+
+
+def _task_id_from_generated_file(file_path: str) -> str:
+    """从 output/chat/YYYYMMDD_HHMMSS/gongzhonghao.md 反推出 task_id。"""
+    if not file_path:
+        return ""
+    parent_name = Path(file_path).parent.name
+    if re.match(r"\d{8}_\d{6}$", parent_name):
+        return f"chat_{parent_name}"
+    return ""
 
 
 def _result_to_response(result: dict) -> tuple[str, str, list[str], bool]:
@@ -437,6 +461,17 @@ def _copy_chat_history(chat_history: list) -> list:
 def _detect_requested_platforms(message: str) -> list:
     """优先从末尾生成指令判断平台，避免正文里的平台词误触发。"""
     message_lower = message.lower()
+    target_match = re.search(r"【目标平台】\s*([a-z_,，\s]+)", message, re.IGNORECASE)
+    if target_match:
+        requested = [
+            item.strip()
+            for item in re.split(r"[,，\s]+", target_match.group(1))
+            if item.strip()
+        ]
+        valid = [p for p in requested if p in PLATFORM_LABELS]
+        if valid:
+            return valid
+
     non_empty_lines = [line.strip().lower() for line in message.splitlines() if line.strip()]
     last_line = non_empty_lines[-1] if non_empty_lines else message_lower
     if any(kw in last_line for kw in ["写", "生成", "创作", "改写", "整理"]):
@@ -467,6 +502,73 @@ def _detect_requested_platforms(message: str) -> list:
         platforms.append("douyin")
 
     return platforms or ["gongzhonghao"]
+
+
+def _clean_original_user_message_for_revision(message: str) -> str:
+    """清理聊天展示文本，只保留用户原始需求。"""
+    lines = []
+    for line in (message or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("📎 已上传笔记"):
+            continue
+        if stripped.startswith("📚 记忆索引"):
+            continue
+        if stripped.startswith("【系统："):
+            break
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _filter_revision_prompt_for_platforms(revision_prompt: str, platforms: list[str]) -> str:
+    """只保留目标平台相关的审核建议，避免小红书/抖音建议污染公众号重写。"""
+    if not revision_prompt:
+        return ""
+    labels = [PLATFORM_LABELS.get(platform, platform) for platform in platforms]
+    kept = []
+    for line in revision_prompt.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        if stripped.startswith("[") and not any(label in stripped for label in labels):
+            continue
+        if any(
+            other in stripped
+            for other in PLATFORM_LABELS.values()
+            if other not in labels
+        ) and not any(label in stripped for label in labels):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip() or revision_prompt
+
+
+def _build_review_revision_message(panel, chat_history: list, max_attempts: int) -> str:
+    """为审核面板的自动重写构造稳定输入。"""
+    platforms = panel.platforms or ["gongzhonghao"]
+    original_message = ""
+    for msg in reversed(chat_history):
+        if msg.get("role") == "user":
+            original_message = _clean_original_user_message_for_revision(msg.get("content", ""))
+            break
+
+    content = panel.raw_content
+    previous_parts = []
+    for platform in platforms:
+        text = getattr(content, platform, "") if content is not None else ""
+        if text:
+            previous_parts.append(f"【上一版{PLATFORM_LABELS.get(platform, platform)}】\n{text}")
+
+    revision_prompt = _filter_revision_prompt_for_platforms(panel.get_revision_prompt(), platforms)
+    return (
+        f"【目标平台】{','.join(platforms)}\n\n"
+        f"【原始需求】\n{original_message or '请继续优化上一版内容'}\n\n"
+        f"{chr(10).join(previous_parts)}\n\n"
+        f"【系统：根据以下修改意见重新生成，第 {panel.revision_count}/{max_attempts} 次修改】\n"
+        f"{revision_prompt}\n\n"
+        "【输出要求】\n"
+        "- 只输出目标平台内容，不要生成其他平台内容\n"
+        "- 基于上一版内容定向修改，不要换主题\n"
+    )
 
 
 def _extract_topic_or_source(message: str) -> tuple:
@@ -1373,12 +1475,13 @@ def create_chat_ui():
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
         if not gzh_file_path:
-            return "❌ 请先生成公众号内容"
+            return "❌ 请先生成公众号内容", refresh_generated_history()
         if not cover_image:
-            return "❌ 请上传封面图片"
+            return "❌ 请上传封面图片", refresh_generated_history()
         
         try:
             from content_agent.publisher import publish_wechat_draft
+            task_id = _task_id_from_generated_file(gzh_file_path)
             # 读取文件内容提取标题（第一行 # 标题）
             content = Path(gzh_file_path).read_text(encoding="utf-8")
             title = content.splitlines()[0].lstrip("# ").strip() if content else "Generated Article"
@@ -1391,11 +1494,36 @@ def create_chat_ui():
                 cover_path=cover_image,
             )
             if result.get("success"):
-                return f"✅ {result.get('message', '发布成功')}"
+                if task_id:
+                    save_publish_status(
+                        task_id=task_id,
+                        platform="gongzhonghao",
+                        status="draft_saved",
+                        message=result.get("message", "发布成功"),
+                        details=result.get("details", ""),
+                    )
+                return f"✅ {result.get('message', '发布成功')}", refresh_generated_history()
             else:
-                return f"❌ {result.get('message', '发布失败')}\n详情: {result.get('details', '')}"
+                if task_id:
+                    save_publish_status(
+                        task_id=task_id,
+                        platform="gongzhonghao",
+                        status="failed",
+                        message=result.get("message", "发布失败"),
+                        details=result.get("details", ""),
+                    )
+                return f"❌ {result.get('message', '发布失败')}\n详情: {result.get('details', '')}", refresh_generated_history()
         except Exception as e:
-            return f"❌ 发布异常: {str(e)}"
+            task_id = _task_id_from_generated_file(gzh_file_path)
+            if task_id:
+                save_publish_status(
+                    task_id=task_id,
+                    platform="gongzhonghao",
+                    status="failed",
+                    message="发布异常",
+                    details=str(e),
+                )
+            return f"❌ 发布异常: {str(e)}", refresh_generated_history()
 
     def refresh_generated_history():
         """刷新历史任务面板"""
@@ -1876,7 +2004,7 @@ def create_chat_ui():
         publish_btn.click(
             publish_gzh,
             inputs=[cover_upload, last_gzh_file],
-            outputs=[pub_status]
+            outputs=[pub_status, history_panel]
         )
 
         refresh_history_btn.click(
@@ -2006,16 +2134,7 @@ def create_chat_ui():
                 return
 
             panel.revision_count += 1
-            revision_prompt = panel.get_revision_prompt()
-
-            # 从聊天记录中提取用户原始需求
-            original_message = ""
-            for msg in reversed(chat_history):
-                if msg.get("role") == "user":
-                    original_message = msg.get("content", "")
-                    break
-
-            revised_message = f"{original_message}\n\n【系统：根据以下修改意见重新生成，第 {panel.revision_count}/{MAX_REVISION_ATTEMPTS} 次修改】\n{revision_prompt}"
+            revised_message = _build_review_revision_message(panel, chat_history, MAX_REVISION_ATTEMPTS)
 
             # 先隐藏审核面板
             yield (

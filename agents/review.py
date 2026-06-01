@@ -133,6 +133,11 @@ class ReviewManager:
             return 0
 
     @staticmethod
+    def _pick_suggestion_for_platform(suggestions: List[str], platform: str, name: str) -> str:
+        matched = [s for s in suggestions if platform in s or name in s]
+        return "; ".join(matched)
+
+    @staticmethod
     def create_panel(
         verdict: EditVerdict,
         threshold: int = DEFAULT_THRESHOLD,
@@ -154,11 +159,7 @@ class ReviewManager:
             name = PLATFORM_NAMES.get(platform, platform) or platform
             passed = score_value >= threshold_value
             # 尝试从 suggestions 中提取对应平台的建议
-            suggestion = ""
-            for s in suggestions:
-                if platform in s or name in s:
-                    suggestion = s
-                    break
+            suggestion = ReviewManager._pick_suggestion_for_platform(suggestions, platform, name)
             if not suggestion and not passed:
                 suggestion = f"{name}内容质量不达标，需改进"
             items.append(ReviewItem(
@@ -169,15 +170,29 @@ class ReviewManager:
                 suggestion=suggestion,
             ))
 
-        # 如果没有平台分数，创建一个综合项
+        # 如果没有平台分数，按目标平台兜底创建平台项，避免小红书/抖音建议混入公众号任务
         if not items:
-            items.append(ReviewItem(
-                dimension="综合评分",
-                score=overall,
-                threshold=threshold_value,
-                passed=verdict.passed,
-                suggestion="; ".join(suggestions) if suggestions else "",
-            ))
+            if platform_filter:
+                for platform in platforms or []:
+                    name = PLATFORM_NAMES.get(platform, platform) or platform
+                    suggestion = ReviewManager._pick_suggestion_for_platform(suggestions, platform, name)
+                    if not suggestion and overall < threshold_value:
+                        suggestion = f"{name}内容质量不达标，需改进"
+                    items.append(ReviewItem(
+                        dimension=name,
+                        score=overall,
+                        threshold=threshold_value,
+                        passed=overall >= threshold_value,
+                        suggestion=suggestion,
+                    ))
+            else:
+                items.append(ReviewItem(
+                    dimension="综合评分",
+                    score=overall,
+                    threshold=threshold_value,
+                    passed=verdict.passed,
+                    suggestion="; ".join(suggestions) if suggestions else "",
+                ))
         elif platform_filter:
             overall = int(sum(item.score for item in items) / len(items))
 

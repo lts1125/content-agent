@@ -160,6 +160,25 @@ class ReviewPanelTest(unittest.TestCase):
         self.assertTrue(panel.passed)
         self.assertEqual(1, len(panel.items))
 
+    def test_create_panel_uses_target_platform_when_scores_are_missing(self):
+        verdict = _make_verdict(
+            overall=65,
+            passed=False,
+            scores={},
+            suggestions=[
+                "[公众号] 开头不够抓人 → 增加生活化例子",
+                "[小红书] 标题缺少 emoji → 添加 emoji",
+                "[抖音] 缺少画面提示 → 增加镜头说明",
+            ],
+        )
+
+        panel = ReviewManager.create_panel(verdict, threshold=75, platforms=["gongzhonghao"])
+
+        self.assertEqual(1, len(panel.items))
+        self.assertEqual("公众号", panel.items[0].dimension)
+        self.assertIn("生活化例子", panel.items[0].suggestion)
+        self.assertNotIn("emoji", panel.items[0].suggestion)
+
     def test_create_panel_fallback_when_no_platform_scores(self):
         verdict = _make_verdict(
             overall=80,

@@ -15,7 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
-_SCHEMA_VERSION = 6
+_SCHEMA_VERSION = 7
 
 
 def _ensure_db():
@@ -387,6 +387,28 @@ def init_indexed_notes_table():
     conn.close()
 
 
+def init_publish_status_table():
+    """生成任务的发布状态回写表。"""
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS publish_status (
+            task_id         TEXT NOT NULL,
+            platform        TEXT NOT NULL,
+            status          TEXT NOT NULL,
+            message         TEXT,
+            details         TEXT,
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (task_id, platform)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_publish_status_task ON publish_status(task_id);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def migrate_tasks_add_trace():
     """tasks 表增加 trace 字段（执行轨迹持久化）"""
     if not _column_exists("tasks", "trace"):
@@ -463,6 +485,7 @@ def init_db():
     init_user_preferences_table()    # 记忆系统: 用户偏好
     init_review_panels_table()       # 审核面板
     init_indexed_notes_table()       # 上传笔记去重
+    init_publish_status_table()      # 发布状态回写
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)
@@ -716,11 +739,18 @@ def list_generated_turns(limit: int = 20) -> list:
     conn = _get_conn()
     rows = conn.execute(
         """
-        SELECT *
+        SELECT conversation_turns.*,
+               publish_status.status as publish_status,
+               publish_status.message as publish_message,
+               publish_status.details as publish_details,
+               publish_status.updated_at as publish_updated_at
         FROM conversation_turns
-        WHERE role = 'assistant'
-          AND files IS NOT NULL
-        ORDER BY created_at DESC, id DESC
+        LEFT JOIN publish_status
+          ON conversation_turns.task_id = publish_status.task_id
+         AND publish_status.platform = 'gongzhonghao'
+        WHERE conversation_turns.role = 'assistant'
+          AND conversation_turns.files IS NOT NULL
+        ORDER BY conversation_turns.created_at DESC, conversation_turns.id DESC
         LIMIT ?
         """,
         (limit,),
@@ -762,6 +792,44 @@ def delete_indexed_note(content_hash: str) -> bool:
     """删除测试或维护用的索引记录。"""
     conn = _get_conn()
     cur = conn.execute("DELETE FROM indexed_notes WHERE content_hash = ?", (content_hash,))
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def save_publish_status(
+    task_id: str,
+    platform: str,
+    status: str,
+    message: str = "",
+    details: str = "",
+) -> None:
+    """保存或更新某个生成任务的发布状态。"""
+    conn = _get_conn()
+    conn.execute(
+        """
+        INSERT INTO publish_status (task_id, platform, status, message, details, updated_at)
+        VALUES (?, ?, ?, ?, ?, datetime('now'))
+        ON CONFLICT(task_id, platform) DO UPDATE SET
+            status=excluded.status,
+            message=excluded.message,
+            details=excluded.details,
+            updated_at=datetime('now')
+        """,
+        (task_id, platform, status, message, details),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_publish_status(task_id: str, platform: str = "gongzhonghao") -> bool:
+    """删除发布状态记录，主要用于测试清理。"""
+    conn = _get_conn()
+    cur = conn.execute(
+        "DELETE FROM publish_status WHERE task_id = ? AND platform = ?",
+        (task_id, platform),
+    )
     conn.commit()
     deleted = cur.rowcount > 0
     conn.close()
