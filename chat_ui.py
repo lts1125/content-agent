@@ -588,6 +588,14 @@ def _parse_preference_value(value: str):
     return value
 
 
+def _preference_control_defaults(prefs: dict) -> tuple[str, str, str, list[str]]:
+    reader = prefs.get("gzh_target_reader") or "未设置"
+    style = prefs.get("gzh_default_style") or "未设置"
+    length = prefs.get("preferred_length") or "未设置"
+    weak_dimensions = _as_list(prefs.get("weak_dimensions"))
+    return reader, style, length, weak_dimensions
+
+
 def _format_generated_history(items: list[dict], limit: int = 8) -> str:
     """把生成历史渲染为 Markdown，供页面面板和系统命令复用。"""
     if not items:
@@ -1813,6 +1821,26 @@ def create_chat_ui():
             None,
             _format_preference_summary_html(_get_agent_preferences(agent)),
         )
+
+    def save_preference_controls(reader, style, length, weak_dimensions):
+        """保存页面上的公众号偏好控件。"""
+        selections = {
+            "gzh_target_reader": reader,
+            "gzh_default_style": style,
+            "preferred_length": length,
+            "weak_dimensions": weak_dimensions or [],
+        }
+        for key, value in selections.items():
+            if value in ("未设置", None, ""):
+                value = [] if key == "weak_dimensions" else ""
+            agent.memory.set_preference(key, value, source="explicit", confidence=1.0)
+
+        prefs = agent.memory.get_preferences()
+        return (
+            "✅ 已保存公众号偏好",
+            _format_preference_summary_html(prefs),
+            _format_user_preferences(prefs),
+        )
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -2220,6 +2248,40 @@ def create_chat_ui():
                     preference_summary = gr.HTML(
                         _format_preference_summary_html(_get_agent_preferences(agent))
                     )
+                    pref_reader_default, pref_style_default, pref_length_default, pref_weak_default = _preference_control_defaults(
+                        _get_agent_preferences(agent)
+                    )
+                    with gr.Accordion("公众号偏好设置", open=False):
+                        pref_reader = gr.Dropdown(
+                            label="默认读者",
+                            choices=["未设置", "普通技术人", "小白读者", "资深工程师", "非技术人员"],
+                            value=pref_reader_default,
+                            interactive=True,
+                        )
+                        pref_style = gr.Dropdown(
+                            label="默认风格",
+                            choices=["未设置", "通俗科普", "技术深度", "经验复盘"],
+                            value=pref_style_default,
+                            interactive=True,
+                        )
+                        pref_length = gr.Dropdown(
+                            label="默认长度",
+                            choices=["未设置", "short", "medium", "long"],
+                            value=pref_length_default,
+                            interactive=True,
+                        )
+                        pref_weak = gr.CheckboxGroup(
+                            label="弱项强化",
+                            choices=["readability", "originality", "practicality"],
+                            value=pref_weak_default,
+                            interactive=True,
+                        )
+                        save_pref_btn = gr.Button("保存公众号偏好", size="sm", variant="secondary")
+                        pref_save_status = gr.Markdown("")
+                        pref_detail = gr.Markdown(
+                            _format_user_preferences(_get_agent_preferences(agent)),
+                            visible=False,
+                        )
                     with gr.Row(elem_classes=["secondary-actions"]):
                         btn_gzh = gr.Button("公众号文章", size="sm", variant="secondary")
                         btn_xhs = gr.Button("小红书笔记", size="sm")
@@ -2347,6 +2409,12 @@ def create_chat_ui():
         refresh_history_btn.click(
             refresh_generated_history,
             outputs=[history_panel],
+        )
+
+        save_pref_btn.click(
+            save_preference_controls,
+            inputs=[pref_reader, pref_style, pref_length, pref_weak],
+            outputs=[pref_save_status, preference_summary, pref_detail],
         )
 
         # 审核按钮事件

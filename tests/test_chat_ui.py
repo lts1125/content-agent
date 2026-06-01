@@ -196,6 +196,23 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("长度：medium", html)
         self.assertIn("弱项强化：readability、originality", html)
 
+    def test_preference_control_defaults_read_saved_preferences(self):
+        defaults = chat_ui._preference_control_defaults(
+            {
+                "gzh_target_reader": "普通技术人",
+                "gzh_default_style": "通俗科普",
+                "preferred_length": "medium",
+                "weak_dimensions": ["readability"],
+            }
+        )
+
+        self.assertEqual(("普通技术人", "通俗科普", "medium", ["readability"]), defaults)
+
+    def test_preference_control_defaults_handle_empty_preferences(self):
+        defaults = chat_ui._preference_control_defaults({})
+
+        self.assertEqual(("未设置", "未设置", "未设置", []), defaults)
+
     def test_preference_generation_status_shows_empty_state_for_gongzhonghao(self):
         message = chat_ui._format_preference_generation_status([], ["gongzhonghao"])
 
