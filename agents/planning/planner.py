@@ -17,6 +17,8 @@ def _extract_topic(raw_notes: str) -> str:
         line = line.strip()
         if not line:
             continue
+        if line.startswith("【") and line.endswith("】"):
+            continue
         if line.startswith("#"):
             return line.lstrip("#").strip()
         return line[:100]
@@ -113,14 +115,15 @@ class AutonomousPlanner:
                     total_steps=len(strategy.steps),
                 )
 
-                if score >= strategy.threshold:
-                    print(f"   ✅ 评分达标 ({score}/{strategy.threshold})")
+                score_value = self._coerce_score(score)
+                if score_value >= strategy.threshold:
+                    print(f"   ✅ 评分达标 ({score_value}/{strategy.threshold})")
                     self._emit_progress(
                         progress_callback,
                         step=f"evaluate-{attempt + 1}",
                         title=f"质量评估（第 {attempt + 1} 轮）",
                         status="done",
-                        detail=f"评分达标：{score}/{strategy.threshold}",
+                        detail=f"评分达标：{score_value}/{strategy.threshold}",
                         step_index=eval_idx + 1,
                         total_steps=len(strategy.steps),
                     )
@@ -130,7 +133,7 @@ class AutonomousPlanner:
                 if enable_review_panel and attempt == 0 and context.edit_verdict:
                     from agents.review import ReviewManager
                     panel = ReviewManager.create_panel(
-                        context.edit_verdict, threshold=strategy.threshold
+                        context.edit_verdict, threshold=strategy.threshold, platforms=platforms
                     )
                     panel.raw_content = context.draft_content
                     panel.platforms = platforms
@@ -205,6 +208,13 @@ class AutonomousPlanner:
     def _emit_progress(callback: Optional[Callable[[dict], None]], **event):
         if callback:
             callback(event)
+
+    @staticmethod
+    def _coerce_score(value) -> int:
+        try:
+            return int(float(str(value).split("/")[0].strip()))
+        except (TypeError, ValueError):
+            return 0
 
     @staticmethod
     def _step_title(step: str) -> str:

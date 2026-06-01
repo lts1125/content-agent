@@ -689,6 +689,24 @@ def list_sessions(limit: int = 20) -> list:
     return [dict(r) for r in rows]
 
 
+def list_generated_turns(limit: int = 20) -> list:
+    """列出最近生成过文件的 assistant 轮次，供历史任务入口使用。"""
+    conn = _get_conn()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM conversation_turns
+        WHERE role = 'assistant'
+          AND files IS NOT NULL
+        ORDER BY created_at DESC, id DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def clear_session(session_id: str) -> int:
     """清除指定会话，返回删除行数"""
     conn = _get_conn()

@@ -13,6 +13,11 @@ class PlannerGenerationContextTest(unittest.TestCase):
 
         self.assertEqual("给小白介绍 AI Agent", _extract_topic(raw_notes))
 
+    def test_extract_topic_skips_revision_wrapper_marker(self):
+        raw_notes = "【上一版公众号文章】\n# 你发的每一条内容，可能都发错了时间\n\n【修改要求】\n把开头写得更抓人"
+
+        self.assertEqual("你发的每一条内容，可能都发错了时间", _extract_topic(raw_notes))
+
     def test_search_uses_topic_not_entire_raw_notes(self):
         planner = AutonomousPlanner()
         raw_notes = "# 给小白介绍 AI Agent\n\n## 搜索资料\n\n[Google] unrelated"

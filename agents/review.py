@@ -126,16 +126,33 @@ class ReviewManager:
     """审核管理器：将 EditorAgent 结果转换为审核面板，处理用户决策。"""
 
     @staticmethod
-    def create_panel(verdict: EditVerdict, threshold: int = DEFAULT_THRESHOLD) -> ReviewPanel:
+    def _coerce_score(value) -> int:
+        try:
+            return int(float(str(value).split("/")[0].strip()))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def create_panel(
+        verdict: EditVerdict,
+        threshold: int = DEFAULT_THRESHOLD,
+        platforms: Optional[List[str]] = None,
+    ) -> ReviewPanel:
         """根据评分结果创建审核面板"""
         items = []
         scores = getattr(verdict, "scores", {}) or {}
         suggestions = getattr(verdict, "suggestions", []) or []
+        platform_filter = set(platforms or [])
+        threshold_value = ReviewManager._coerce_score(threshold)
+        overall = ReviewManager._coerce_score(getattr(verdict, "overall", 0))
 
         # 将平台分数转换为 ReviewItem
         for platform, score in scores.items():
+            if platform_filter and platform not in platform_filter:
+                continue
+            score_value = ReviewManager._coerce_score(score)
             name = PLATFORM_NAMES.get(platform, platform) or platform
-            passed = score >= threshold
+            passed = score_value >= threshold_value
             # 尝试从 suggestions 中提取对应平台的建议
             suggestion = ""
             for s in suggestions:
@@ -146,8 +163,8 @@ class ReviewManager:
                 suggestion = f"{name}内容质量不达标，需改进"
             items.append(ReviewItem(
                 dimension=name,
-                score=int(score),
-                threshold=threshold,
+                score=score_value,
+                threshold=threshold_value,
                 passed=passed,
                 suggestion=suggestion,
             ))
@@ -156,11 +173,13 @@ class ReviewManager:
         if not items:
             items.append(ReviewItem(
                 dimension="综合评分",
-                score=verdict.overall,
-                threshold=threshold,
+                score=overall,
+                threshold=threshold_value,
                 passed=verdict.passed,
                 suggestion="; ".join(suggestions) if suggestions else "",
             ))
+        elif platform_filter:
+            overall = int(sum(item.score for item in items) / len(items))
 
         verdict_text = getattr(verdict, "verdict", "")
         if verdict_text == "pass":
@@ -171,9 +190,9 @@ class ReviewManager:
             verdict_text = "需人工复审"
 
         panel = ReviewPanel(
-            overall=verdict.overall,
-            threshold=threshold,
-            passed=verdict.passed,
+            overall=overall,
+            threshold=threshold_value,
+            passed=overall >= threshold_value,
             items=items,
             verdict_text=verdict_text,
         )

@@ -130,6 +130,36 @@ class ReviewPanelTest(unittest.TestCase):
         self.assertEqual(60, panel.items[1].score)
         self.assertFalse(panel.items[1].passed)
 
+    def test_create_panel_filters_to_requested_platforms_and_coerces_scores(self):
+        verdict = _make_verdict(
+            overall="82",
+            passed=True,
+            scores={"gongzhonghao": "82", "xiaohongshu": "0", "douyin": "0"},
+            suggestions=["公众号开头可以更抓人"],
+        )
+
+        panel = ReviewManager.create_panel(verdict, threshold=75, platforms=["gongzhonghao"])
+
+        self.assertEqual(82, panel.overall)
+        self.assertEqual(1, len(panel.items))
+        self.assertEqual("公众号", panel.items[0].dimension)
+        self.assertEqual(82, panel.items[0].score)
+        self.assertTrue(panel.items[0].passed)
+
+    def test_create_panel_recomputes_overall_after_platform_filter(self):
+        verdict = _make_verdict(
+            overall=0,
+            passed=False,
+            scores={"gongzhonghao": 82, "xiaohongshu": 0, "douyin": 0},
+            suggestions=["小红书缺少标签", "抖音缺少口播"],
+        )
+
+        panel = ReviewManager.create_panel(verdict, threshold=75, platforms=["gongzhonghao"])
+
+        self.assertEqual(82, panel.overall)
+        self.assertTrue(panel.passed)
+        self.assertEqual(1, len(panel.items))
+
     def test_create_panel_fallback_when_no_platform_scores(self):
         verdict = _make_verdict(
             overall=80,

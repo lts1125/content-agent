@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -95,6 +96,52 @@ class ChatProgressTest(unittest.TestCase):
             self.assertIn(str(output_dir / "xiaohongshu.html"), files)
             self.assertIn(str(output_dir / "xiaohongshu.zip"), files)
 
+    def test_format_memory_refs_lists_sources(self):
+        refs = [
+            {
+                "title": "Content Agent 笔记",
+                "source": "notes/agent.md",
+                "heading": "RAG 引用",
+                "snippet": "这里记录了如何把历史笔记注入生成流程。",
+            }
+        ]
+
+        message = chat_ui._format_memory_refs(refs)
+
+        self.assertIn("本次参考了 1 条历史笔记", message)
+        self.assertIn("Content Agent 笔记", message)
+        self.assertIn("RAG 引用", message)
+        self.assertIn("notes/agent.md", message)
+
+    def test_format_memory_refs_handles_empty_refs(self):
+        message = chat_ui._format_memory_refs([])
+
+        self.assertIn("未使用历史笔记", message)
+
+    def test_format_generated_history_lists_generated_files(self):
+        items = [
+            {
+                "session_id": "session_abcdef",
+                "task_id": "chat_20260601_150000",
+                "platforms": '["gongzhonghao"]',
+                "files": '["output/chat/20260601_150000/gongzhonghao.md"]',
+                "created_at": "2026-06-01 15:00:00",
+            }
+        ]
+
+        message = chat_ui._format_generated_history(items)
+
+        self.assertIn("近期生成历史", message)
+        self.assertIn("修改 task chat_YYYYMMDD_HHMMSS", message)
+        self.assertIn("公众号", message)
+        self.assertIn("chat_20260601_150000", message)
+        self.assertIn("gongzhonghao.md", message)
+
+    def test_format_generated_history_handles_empty_items(self):
+        message = chat_ui._format_generated_history([])
+
+        self.assertIn("暂无生成历史", message)
+
 
 class ChatIntentTest(unittest.TestCase):
     def test_tail_instruction_wins_over_body_platform_mentions(self):
@@ -126,6 +173,23 @@ class ChatIntentTest(unittest.TestCase):
         self.assertFalse(intent["has_source_material"])
         self.assertIn("介绍 AI Agent", intent["topic"])
         self.assertNotIn("公众号文章", intent["topic"])
+
+    def test_revision_request_is_treated_as_generation_intent(self):
+        intent = chat_ui.ChatAgent()._analyze_intent(
+            "修改 task chat_20260601_152531，把开头写得更抓人"
+        )
+
+        self.assertEqual("generate", intent["type"])
+        self.assertEqual(["gongzhonghao"], intent["platforms"])
+
+    def test_revision_request_without_generate_keyword_is_generation_intent(self):
+        intent = chat_ui.ChatAgent()._analyze_intent("把刚才那篇改得更通俗一点")
+
+        self.assertEqual("generate", intent["type"])
+        self.assertEqual(["gongzhonghao"], intent["platforms"])
+
+    def test_generic_optimization_topic_is_not_revision_request(self):
+        self.assertFalse(chat_ui._is_revision_request("帮我写一篇关于如何优化 Python 性能的公众号文章"))
 
     def test_extracts_writing_requirements_from_user_request(self):
         intent = chat_ui.ChatAgent()._analyze_intent(
@@ -168,6 +232,71 @@ class ChatIntentTest(unittest.TestCase):
         self.assertIn("MCP 可以连接 AI 和外部工具", merged)
         self.assertIn("根据以上内容，根据这篇笔记生成一篇公众号文章", merged)
         self.assertIn("面向普通人", merged)
+
+    def test_revision_request_can_target_specific_task(self):
+        with TemporaryDirectory() as tmp_dir:
+            old_path = Path(tmp_dir) / "old" / "gongzhonghao.md"
+            target_path = Path(tmp_dir) / "target" / "gongzhonghao.md"
+            old_path.parent.mkdir(parents=True)
+            target_path.parent.mkdir(parents=True)
+            old_path.write_text("# 旧文章\n\n旧内容", encoding="utf-8")
+            target_path.write_text("# 指定文章\n\n指定内容", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_100000",
+                            "platforms": '["gongzhonghao"]',
+                            "files": json.dumps([str(old_path)]),
+                            "session_id": "old_session",
+                            "created_at": "2026-06-01 10:00:00",
+                        },
+                        {
+                            "task_id": "chat_20260601_110000",
+                            "platforms": '["gongzhonghao"]',
+                            "files": json.dumps([str(target_path)]),
+                            "session_id": "target_session",
+                            "created_at": "2026-06-01 11:00:00",
+                        },
+                    ]
+
+            notes, meta = chat_ui._build_revision_notes_from_history(
+                FakeMemory(),
+                "修改 task chat_20260601_110000，把开头写得更抓人",
+            )
+
+            self.assertIn("# 指定文章", notes)
+            self.assertNotIn("# 旧文章", notes)
+            self.assertIn("把开头写得更抓人", notes)
+            self.assertEqual("chat_20260601_110000", meta["task_id"])
+
+    def test_revision_request_defaults_to_latest_gongzhonghao_history(self):
+        with TemporaryDirectory() as tmp_dir:
+            latest_path = Path(tmp_dir) / "latest" / "gongzhonghao.md"
+            latest_path.parent.mkdir(parents=True)
+            latest_path.write_text("# 最近文章\n\n最近内容", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_120000",
+                            "platforms": '["gongzhonghao"]',
+                            "files": json.dumps([str(latest_path)]),
+                            "session_id": "latest_session",
+                            "created_at": "2026-06-01 12:00:00",
+                        }
+                    ]
+
+            notes, meta = chat_ui._build_revision_notes_from_history(
+                FakeMemory(),
+                "把刚才那篇改得更通俗一点",
+            )
+
+            self.assertIn("# 最近文章", notes)
+            self.assertIn("把刚才那篇改得更通俗一点", notes)
+            self.assertEqual("chat_20260601_120000", meta["task_id"])
 
 
 class GongzhonghaoPopularPromptTest(unittest.TestCase):

@@ -156,6 +156,10 @@ class MemoryManager:
         """列出最近有活动的会话"""
         return store.list_sessions(limit=limit)
 
+    def list_generated_history(self, limit: int = 20) -> List[dict]:
+        """列出最近有生成文件的历史记录。"""
+        return store.list_generated_turns(limit=limit)
+
     def clear_session(self, session_id: str) -> int:
         """清除指定会话"""
         return store.clear_session(session_id)

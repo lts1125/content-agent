@@ -159,6 +159,21 @@ PROGRESS_ICONS = {
     "pending": "○",
 }
 
+REVISION_TASK_RE = re.compile(r"(chat_\d{8}_\d{6})")
+REVISION_KEYWORDS = [
+    "刚才那篇",
+    "上一版",
+    "上一次",
+    "前面那篇",
+    "这篇文章",
+    "上面这篇",
+    "刚才生成",
+    "刚生成",
+    "继续改",
+    "继续修改",
+    "继续优化",
+]
+
 
 def _format_progress_message(events: list) -> str:
     """把执行事件渲染成聊天里的进度消息。"""
@@ -189,6 +204,67 @@ def _merge_progress_event(events: list, event: dict) -> list:
             return merged
     merged.append(event)
     return merged
+
+
+def _extract_revision_task_id(message: str) -> Optional[str]:
+    match = REVISION_TASK_RE.search(message or "")
+    return match.group(1) if match else None
+
+
+def _is_revision_request(message: str) -> bool:
+    msg = message or ""
+    return bool(_extract_revision_task_id(msg)) or any(keyword in msg for keyword in REVISION_KEYWORDS)
+
+
+def _select_gongzhonghao_file(files: list) -> Optional[str]:
+    if not files:
+        return None
+    return next((f for f in files if "gongzhonghao" in f and str(f).endswith(".md")), None)
+
+
+def _build_revision_notes_from_history(memory, message: str) -> tuple[Optional[str], Optional[dict]]:
+    """根据用户修改指令，从历史任务中读取待修改公众号文章。"""
+    if not _is_revision_request(message):
+        return None, None
+
+    target_task_id = _extract_revision_task_id(message)
+    history = memory.list_generated_history(limit=50)
+
+    selected = None
+    selected_file = None
+    for item in history:
+        if target_task_id and item.get("task_id") != target_task_id:
+            continue
+        files = _safe_json_load(item.get("files"), [])
+        gzh_file = _select_gongzhonghao_file(files)
+        if gzh_file:
+            selected = item
+            selected_file = gzh_file
+            break
+
+    if not selected or not selected_file:
+        if target_task_id:
+            raise ValueError(f"没有找到 task {target_task_id} 对应的公众号文章文件")
+        raise ValueError("没有找到可继续修改的历史公众号文章")
+
+    article_path = Path(selected_file)
+    if not article_path.exists():
+        raise ValueError(f"历史文章文件不存在: {selected_file}")
+
+    article = article_path.read_text(encoding="utf-8")
+    task_id = selected.get("task_id") or ""
+    notes = (
+        f"【上一版公众号文章】\n{article}\n\n"
+        f"【修改要求】\n{message.strip()}\n\n"
+        "【输出要求】\n"
+        "- 基于上一版文章进行修改，不要凭空换主题\n"
+        "- 输出修改后的微信公众号文章\n"
+    )
+    return notes, {
+        "task_id": task_id,
+        "file": selected_file,
+        "session_id": selected.get("session_id", ""),
+    }
 
 
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
@@ -237,6 +313,64 @@ def _download_button_updates(files):
         gr.update(value=by_platform.get("xiaohongshu"), visible=bool(by_platform.get("xiaohongshu"))),
         gr.update(value=by_platform.get("douyin"), visible=bool(by_platform.get("douyin"))),
     )
+
+
+def _safe_json_load(value, default=None):
+    if value is None:
+        return default if default is not None else []
+    if isinstance(value, (list, dict)):
+        return value
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return default if default is not None else []
+    return default if default is not None else []
+
+
+def _format_memory_refs(memory_refs: list[dict]) -> str:
+    """把本次 RAG 引用来源渲染为给用户看的 Markdown。"""
+    if not memory_refs:
+        return "\n\n📚 **本次参考资料：** 未使用历史笔记，仅基于当前输入生成。"
+
+    lines = ["", "", f"📚 **本次参考了 {len(memory_refs)} 条历史笔记：**"]
+    for idx, ref in enumerate(memory_refs, start=1):
+        title = ref.get("title") or "未命名笔记"
+        source = ref.get("source") or "未知来源"
+        heading = ref.get("heading") or ""
+        snippet = (ref.get("snippet") or "").replace("\n", " ").strip()
+        heading_part = f" / {heading}" if heading else ""
+        lines.append(f"{idx}. **{title}**{heading_part}（{source}）")
+        if snippet:
+            lines.append(f"   - {snippet[:120]}...")
+    return "\n".join(lines)
+
+
+def _format_generated_history(items: list[dict], limit: int = 8) -> str:
+    """把生成历史渲染为 Markdown，供页面面板和系统命令复用。"""
+    if not items:
+        return "📚 暂无生成历史。生成公众号文章后，这里会显示最近记录。"
+
+    lines = [
+        "📚 **近期生成历史**",
+        "",
+        "可在输入框里说：`修改 task chat_YYYYMMDD_HHMMSS，把开头写得更抓人`。",
+        "",
+    ]
+    for item in items[:limit]:
+        sid = item["session_id"][:8]
+        task_id = item.get("task_id") or "-"
+        platforms = _safe_json_load(item.get("platforms"), [])
+        files = _safe_json_load(item.get("files"), [])
+        labels = "、".join(PLATFORM_LABELS.get(p, p) for p in platforms) or "未知平台"
+        main_file = next((f for f in files if "gongzhonghao" in f and f.endswith(".md")), None)
+        if main_file is None and files:
+            main_file = files[0]
+        lines.append(f"- **{labels}** — {item['created_at']} — 会话 `{sid}...`")
+        lines.append(f"  - task: `{task_id}`")
+        if main_file:
+            lines.append(f"  - 文件: `{main_file}`")
+    return "\n".join(lines)
 
 
 def _result_to_response(result: dict) -> tuple[str, str, list[str], bool]:
@@ -618,7 +752,7 @@ class ChatAgent:
         
         # 检查是否是生成请求
         generate_keywords = ["写", "生成", "创作", "来一篇", "帮我", "想要"]
-        is_generate = any(kw in message_lower for kw in generate_keywords)
+        is_generate = any(kw in message_lower for kw in generate_keywords) or _is_revision_request(message)
         
         if is_generate:
             platforms = _detect_requested_platforms(message)
@@ -711,11 +845,27 @@ class ChatAgent:
         platforms = intent["platforms"]
         topic = intent["topic"] or original_message
         has_source_material = intent.get("has_source_material", False)
+        revision_meta = None
         if not topic or len(topic) < 5:
             topic = original_message
 
         try:
-            if has_source_material:
+            revision_notes, revision_meta = _build_revision_notes_from_history(self.memory, original_message)
+            if revision_notes:
+                raw_notes = revision_notes
+                topic = f"修改历史文章 {revision_meta.get('task_id') or ''}".strip()
+                if "gongzhonghao" not in platforms:
+                    platforms = ["gongzhonghao"]
+                yield {
+                    "type": "progress",
+                    "event": {
+                        "step": "prepare-notes",
+                        "title": "读取历史文章",
+                        "status": "done",
+                        "detail": f"已读取历史任务：{revision_meta.get('task_id') or revision_meta.get('file')}",
+                    },
+                }
+            elif has_source_material:
                 raw_notes = _build_generation_notes(topic, "", intent)
                 yield {
                     "type": "progress",
@@ -759,6 +909,9 @@ class ChatAgent:
                 },
             }
             strategy = self.selector.select(raw_notes)
+            if revision_meta:
+                strategy.steps = [step for step in strategy.steps if step not in ("search", "browse", "analyze", "read", "execute")]
+                strategy.tools = [tool for tool in strategy.tools if tool not in ("search", "browse", "analyze", "read", "execute")]
             yield {
                 "type": "progress",
                 "event": {
@@ -769,8 +922,8 @@ class ChatAgent:
                 },
             }
 
-            # 注入记忆上下文
-            memory_context = self._build_memory_context(topic)
+            # 注入记忆上下文，并保留引用来源用于前台展示
+            memory_context, memory_refs = self._build_memory_context_with_refs(topic)
             if memory_context:
                 raw_notes = f"{raw_notes}\n\n{memory_context}"
 
@@ -828,7 +981,7 @@ class ChatAgent:
                 task_id = getattr(self, "_current_task_id", self.session_id)
                 ReviewManager.save_panel(panel, task_id)
 
-                review_md = panel.to_markdown()
+                review_md = panel.to_markdown() + _format_memory_refs(memory_refs)
                 yield {
                     "type": "result",
                     "result": {
@@ -837,6 +990,7 @@ class ChatAgent:
                         "content": review_md,
                         "raw_content": content,
                         "platforms": platforms,
+                        "memory_refs": memory_refs,
                     },
                 }
                 return
@@ -854,6 +1008,8 @@ class ChatAgent:
             output_text = f"✅ 已生成 {len(platforms)} 个平台的内容\n\n"
             output_text += f"📋 使用策略: {strategy.name}\n"
             output_text += f"📊 评分: {result.get('verdict', {}).overall if result.get('verdict') else 'N/A'}/100\n\n"
+            if revision_meta:
+                output_text += f"🔁 基于历史任务修改：`{revision_meta.get('task_id') or revision_meta.get('file')}`\n\n"
 
             files = []
             output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -863,6 +1019,7 @@ class ChatAgent:
                 if text:
                     output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
             files = _save_generated_markdown_files(content, platforms, output_dir)
+            output_text += _format_memory_refs(memory_refs)
 
             yield {
                 "type": "progress",
@@ -878,6 +1035,7 @@ class ChatAgent:
             self.memory.save_turn(
                 self.session_id, "assistant", output_text,
                 platforms=platforms, files=files,
+                task_id=f"chat_{output_dir.name}",
             )
 
             yield {
@@ -887,6 +1045,7 @@ class ChatAgent:
                     "content": output_text,
                     "platforms": platforms,
                     "files": files,
+                    "memory_refs": memory_refs,
                 },
             }
         except Exception as e:
@@ -962,6 +1121,7 @@ class ChatAgent:
         - #!search <query> — 测试向量检索
         - #!prefs — 查看当前用户偏好
         - #!sessions — 列出近期会话
+        - #!history — 列出近期生成历史
         - #!memory — 查看向量库状态
         """
         msg = message.strip()
@@ -1012,6 +1172,10 @@ class ChatAgent:
                 lines.append(f"- `{sid}...` — {s['turn_count']} 轮 — {s['last_active']}")
             return {"type": "text", "content": "\n".join(lines)}
 
+        if cmd == "history":
+            items = self.memory.list_generated_history(limit=10)
+            return {"type": "text", "content": _format_generated_history(items, limit=10)}
+
         if cmd == "memory":
             stats = self.memory.get_index_stats()
             return {
@@ -1028,6 +1192,7 @@ class ChatAgent:
 - `#!search <query>` — 向量检索笔记
 - `#!prefs` — 查看用户偏好
 - `#!sessions` — 列出近期会话
+- `#!history` — 列出近期生成历史
 - `#!memory` — 查看向量库状态
 """,
             }
@@ -1035,11 +1200,15 @@ class ChatAgent:
         return None
 
     def _build_memory_context(self, topic: str) -> str:
+        return self._build_memory_context_with_refs(topic)[0]
+
+    def _build_memory_context_with_refs(self, topic: str) -> tuple[str, list[dict]]:
         """构建记忆上下文：包含用户偏好和相关笔记检索结果。
 
-        返回空字符串表示没有可用的记忆上下文。
+        返回 (上下文文本, 引用来源列表)。
         """
         parts = []
+        memory_refs = []
 
         # 1. 用户偏好
         prefs = self.memory.get_preferences()
@@ -1067,11 +1236,19 @@ class ChatAgent:
                 note_lines = []
                 for n in notes:
                     note_lines.append(f"- **{n.title}** ({n.source}): {n.text[:150]}...")
+                    memory_refs.append({
+                        "id": n.id,
+                        "title": n.title,
+                        "source": n.source,
+                        "heading": n.heading,
+                        "distance": n.distance,
+                        "snippet": n.text[:200],
+                    })
                 parts.append("## 相关笔记参考\n" + "\n".join(note_lines))
         except Exception as e:
             logger.warning(f"向量检索失败: {e}")
 
-        return "\n\n".join(parts)
+        return "\n\n".join(parts), memory_refs
 
 
 # ==================== Gradio 界面 ====================
@@ -1202,6 +1379,11 @@ def create_chat_ui():
                 return f"❌ {result.get('message', '发布失败')}\n详情: {result.get('details', '')}"
         except Exception as e:
             return f"❌ 发布异常: {str(e)}"
+
+    def refresh_generated_history():
+        """刷新历史任务面板"""
+        items = agent.memory.list_generated_history(limit=8)
+        return _format_generated_history(items, limit=8)
     
     # 构建界面 - 使用系统字体避免加载 Google Fonts（国内网络阻塞问题）
     theme = gr.themes.Soft(
@@ -1384,6 +1566,22 @@ def create_chat_ui():
         .support-panels {
             margin-top: 12px;
         }
+        .history-scroll {
+            max-height: 360px;
+            overflow-y: auto;
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            background: #ffffff;
+            padding: 12px 14px;
+            margin-top: 10px;
+        }
+        .history-scroll .prose {
+            max-width: none !important;
+        }
+        .history-scroll ul,
+        .history-scroll ol {
+            margin-bottom: 0;
+        }
         .hint-list {
             margin: 0;
             padding-left: 18px;
@@ -1484,6 +1682,9 @@ def create_chat_ui():
                         max_lines=9,
                         show_label=True,
                     )
+                    with gr.Row(elem_classes=["primary-action-row"]):
+                        send_btn = gr.Button("发送", scale=2, variant="primary")
+                        clear_btn = gr.Button("清空对话", scale=1, variant="secondary")
                     gr.HTML("""
                     <div class="preference-summary">
                       <strong>当前默认</strong><br>
@@ -1492,9 +1693,6 @@ def create_chat_ui():
                       历史记忆：开启，生成时会自动检索相关笔记
                     </div>
                     """)
-                    with gr.Row(elem_classes=["primary-action-row"]):
-                        send_btn = gr.Button("生成公众号文章", scale=2, variant="primary")
-                        clear_btn = gr.Button("清空对话", scale=1, variant="secondary")
                     with gr.Row(elem_classes=["secondary-actions"]):
                         btn_gzh = gr.Button("公众号文章", size="sm", variant="secondary")
                         btn_xhs = gr.Button("小红书笔记", size="sm")
@@ -1502,6 +1700,7 @@ def create_chat_ui():
                     with gr.Accordion("记忆与历史入口", open=False):
                         gr.Markdown(
                             "- `#!sessions` 查看近期会话\n"
+                            "- `#!history` 查看近期生成历史\n"
                             "- `#!memory` 查看向量库状态\n"
                             "- `#!search 关键词` 测试历史笔记检索\n"
                             "- `#!index 路径` 手动索引笔记目录"
@@ -1536,6 +1735,11 @@ def create_chat_ui():
                           <li>当前版本可先通过系统命令查看 session 和 memory 状态。</li>
                         </ul>
                         """)
+                        refresh_history_btn = gr.Button("刷新生成历史", size="sm", variant="secondary")
+                        history_panel = gr.Markdown(
+                            _format_generated_history(agent.memory.list_generated_history(limit=8), limit=8),
+                            elem_classes=["history-scroll"],
+                        )
 
             with gr.Row(elem_classes=["delivery-bar"]):
                 with gr.Column(scale=4):
@@ -1611,6 +1815,11 @@ def create_chat_ui():
             publish_gzh,
             inputs=[cover_upload, last_gzh_file],
             outputs=[pub_status]
+        )
+
+        refresh_history_btn.click(
+            refresh_generated_history,
+            outputs=[history_panel],
         )
 
         # 审核按钮事件

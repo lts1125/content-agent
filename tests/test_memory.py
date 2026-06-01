@@ -64,6 +64,34 @@ def test_conversation_turns():
     print("✅ 清理正常")
 
 
+def test_generated_history():
+    """验证生成历史查询只返回带文件的 assistant 轮次"""
+    print("\n【测试2.1】测试生成历史...")
+    sid = "test_generated_history"
+    store.clear_session(sid)
+
+    store.save_conversation_turn(sid, "user", "写篇公众号文章")
+    store.save_conversation_turn(sid, "assistant", "普通回复")
+    store.save_conversation_turn(
+        sid,
+        "assistant",
+        "已生成公众号文章",
+        platforms=["gongzhonghao"],
+        files=["/tmp/gongzhonghao.md"],
+        task_id="chat_20260601_120000",
+    )
+
+    items = store.list_generated_turns(limit=5)
+    matched = [i for i in items if i["session_id"] == sid]
+    assert len(matched) == 1, f"期望 1 条生成历史，实际 {len(matched)} 条"
+    assert matched[0]["task_id"] == "chat_20260601_120000"
+    assert "gongzhonghao.md" in matched[0]["files"]
+    print("✅ 生成历史查询正常")
+
+    deleted = store.clear_session(sid)
+    assert deleted == 3, f"期望删除 3 条，实际 {deleted} 条"
+
+
 def test_user_preferences():
     """验证用户偏好 CRUD"""
     print("\n【测试3】测试用户偏好...")
@@ -150,6 +178,7 @@ def main():
     try:
         test_tables()
         test_conversation_turns()
+        test_generated_history()
         test_user_preferences()
         test_memory_manager_without_vector()
     except AssertionError as e:
