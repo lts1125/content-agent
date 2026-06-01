@@ -92,6 +92,38 @@ def test_generated_history():
     assert deleted == 3, f"期望删除 3 条，实际 {deleted} 条"
 
 
+def test_indexed_note_registry():
+    """验证上传笔记索引注册表按内容 hash 去重"""
+    print("\n【测试2.2】测试笔记索引去重注册表...")
+    content_hash = "test_hash_001"
+    source_path = "/tmp/content-agent-note.md"
+
+    store.delete_indexed_note(content_hash)
+    assert store.get_indexed_note_by_hash(content_hash) is None
+
+    store.save_indexed_note(
+        source_path=source_path,
+        content_hash=content_hash,
+        indexed_chunks=3,
+    )
+    first = store.get_indexed_note_by_hash(content_hash)
+    assert first is not None, "索引记录未保存"
+    assert first["source_path"] == source_path
+    assert first["indexed_chunks"] == 3
+
+    store.save_indexed_note(
+        source_path="/tmp/renamed-note.md",
+        content_hash=content_hash,
+        indexed_chunks=5,
+    )
+    second = store.get_indexed_note_by_hash(content_hash)
+    assert second["source_path"] == "/tmp/renamed-note.md"
+    assert second["indexed_chunks"] == 5
+
+    store.delete_indexed_note(content_hash)
+    print("✅ 笔记索引去重注册表正常")
+
+
 def test_user_preferences():
     """验证用户偏好 CRUD"""
     print("\n【测试3】测试用户偏好...")
@@ -167,6 +199,56 @@ def test_memory_manager_without_vector():
     print("✅ 清理测试数据")
 
 
+def test_memory_manager_skips_duplicate_note_content():
+    """验证 MemoryManager 对同内容上传只写入一次向量库"""
+    print("\n【测试5】测试上传笔记内容去重...")
+    from agents.memory import MemoryManager
+
+    class FakeEmbedder:
+        def embed_batch(self, texts):
+            return [[0.1, 0.2] for _ in texts]
+
+    class FakeStore:
+        def __init__(self):
+            self.add_calls = 0
+
+        def add(self, ids, documents, embeddings, metadatas):
+            self.add_calls += 1
+
+    class FakeIndexer:
+        def __init__(self):
+            self.embedder = FakeEmbedder()
+            self.store = FakeStore()
+
+        def _split_file(self, path, root):
+            return [{
+                "id": "chunk-1",
+                "text": path.read_text(encoding="utf-8"),
+                "metadata": {"source": str(path), "title": path.stem},
+            }]
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        note_path = Path(tmp_dir) / "note.md"
+        note_path.write_text("# 同一篇笔记\n\n重复上传应该跳过索引。", encoding="utf-8")
+
+        mm = MemoryManager()
+        fake_indexer = FakeIndexer()
+        mm._get_indexer = lambda: fake_indexer
+
+        first = mm.index_note_result(note_path)
+        second = mm.index_note_result(note_path)
+
+        assert first.chunks == 1
+        assert not first.skipped
+        assert second.chunks == 0
+        assert second.skipped
+        assert second.reason == "duplicate"
+        assert fake_indexer.store.add_calls == 1
+
+        store.delete_indexed_note(first.content_hash)
+    print("✅ 上传笔记重复内容会跳过索引")
+
+
 def main():
     print("=" * 50)
     print("记忆系统验证")
@@ -179,8 +261,10 @@ def main():
         test_tables()
         test_conversation_turns()
         test_generated_history()
+        test_indexed_note_registry()
         test_user_preferences()
         test_memory_manager_without_vector()
+        test_memory_manager_skips_duplicate_note_content()
     except AssertionError as e:
         print(f"\n❌ 验证失败: {e}")
         sys.exit(1)

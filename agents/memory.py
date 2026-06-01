@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +51,16 @@ class NoteChunk:
     title: str
     heading: str
     distance: float
+
+
+@dataclass
+class IndexNoteResult:
+    """笔记索引结果。"""
+    chunks: int
+    skipped: bool = False
+    reason: str = ""
+    content_hash: str = ""
+    existing_source: str = ""
 
 
 class MemoryManager:
@@ -231,7 +242,7 @@ class MemoryManager:
     # ------------------------------------------------------------------
     # 向量记忆
     # ------------------------------------------------------------------
-    def index_note(self, file_path: Union[str, Path], clear_existing: bool = False) -> int:
+    def index_note_result(self, file_path: Union[str, Path], clear_existing: bool = False) -> IndexNoteResult:
         """
         将单个 Markdown 笔记文件索引到向量库，返回索引的 chunk 数量。
 
@@ -239,36 +250,54 @@ class MemoryManager:
         """
         indexer = self._get_indexer()
         if indexer is None:
-            return 0
+            return IndexNoteResult(chunks=0, reason="vector_unavailable")
 
         path = Path(file_path).expanduser()
         if not path.exists():
             print(f"[MemoryManager] 文件不存在: {path}")
-            return 0
+            return IndexNoteResult(chunks=0, reason="missing_file")
 
         try:
-            if path.is_file() and path.suffix.lower() == ".md":
+            if path.is_file() and path.suffix.lower() in (".md", ".txt"):
+                content = path.read_bytes()
+                content_hash = hashlib.sha256(content).hexdigest()
+                existing = store.get_indexed_note_by_hash(content_hash)
+                if existing and not clear_existing:
+                    return IndexNoteResult(
+                        chunks=0,
+                        skipped=True,
+                        reason="duplicate",
+                        content_hash=content_hash,
+                        existing_source=existing.get("source_path") or "",
+                    )
+
                 # 单文件：使用 VaultIndexer 的内部方法索引
                 chunks = indexer._split_file(path, path.parent)
                 if not chunks:
-                    return 0
+                    store.save_indexed_note(str(path), content_hash, 0)
+                    return IndexNoteResult(chunks=0, content_hash=content_hash, reason="empty")
                 texts = [c["text"] for c in chunks]
                 embeddings = indexer.embedder.embed_batch(texts)
                 ids = [c["id"] for c in chunks]
                 metadatas = [c["metadata"] for c in chunks]
                 indexer.store.add(ids=ids, documents=texts, embeddings=embeddings, metadatas=metadatas)
-                return len(chunks)
+                store.save_indexed_note(str(path), content_hash, len(chunks))
+                return IndexNoteResult(chunks=len(chunks), content_hash=content_hash)
             elif path.is_dir():
                 # 目录：使用现有的 index_vault
                 before = indexer.store.count()
                 indexer.index_vault(path, clear_existing=clear_existing)
                 after = indexer.store.count()
-                return after - before
+                return IndexNoteResult(chunks=after - before)
             else:
-                return 0
+                return IndexNoteResult(chunks=0, reason="unsupported_file")
         except Exception as e:
             print(f"[MemoryManager] 索引失败: {e}")
-            return 0
+            return IndexNoteResult(chunks=0, reason=str(e))
+
+    def index_note(self, file_path: Union[str, Path], clear_existing: bool = False) -> int:
+        """兼容旧调用：只返回新增 chunk 数量。"""
+        return self.index_note_result(file_path, clear_existing=clear_existing).chunks
 
     def search_notes(
         self,

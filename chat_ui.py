@@ -366,10 +366,17 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         main_file = next((f for f in files if "gongzhonghao" in f and f.endswith(".md")), None)
         if main_file is None and files:
             main_file = files[0]
-        lines.append(f"- **{labels}** — {item['created_at']} — 会话 `{sid}...`")
-        lines.append(f"  - task: `{task_id}`")
+        lines.append('<div class="history-task-card">')
+        lines.append(f'<div class="history-card-title">{labels}</div>')
+        lines.append(f'<div class="history-card-meta">{item["created_at"]} · 会话 <code>{sid}...</code></div>')
+        lines.append(f'<div class="history-card-row"><span>task</span><code>{task_id}</code></div>')
         if main_file:
-            lines.append(f"  - 文件: `{main_file}`")
+            lines.append(f'<div class="history-card-row"><span>文件</span><code>{main_file}</code></div>')
+        if task_id and task_id != "-":
+            lines.append(f'<div class="history-card-command"><span>继续改</span><code>修改 task {task_id}，把开头写得更抓人</code></div>')
+            lines.append(f'<div class="history-card-command"><span>通俗化</span><code>基于 task {task_id} 改得更通俗一点</code></div>')
+        lines.append("</div>")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -1267,19 +1274,29 @@ def _respond_stream(agent, message, chat_history, note_file=None):
     try:
         # 检查原始消息是否是系统命令，上传笔记时不应干扰命令执行
         is_system_cmd = message.strip().startswith("#!")
+        index_notice = ""
         if note_file and not is_system_cmd:
             process_message = _merge_uploaded_note_with_message(message, note_file)
             # 用户上传笔记后自动索引到向量库
             try:
                 note_path = _uploaded_file_path(note_file)
                 if note_path:
-                    indexed = agent.memory.index_note(str(note_path))
-                    if indexed > 0:
-                        logger.info(f"自动索引上传笔记: {note_path}, {indexed} chunks")
+                    index_result = agent.memory.index_note_result(str(note_path))
+                    if index_result.skipped:
+                        logger.info(
+                            f"上传笔记已索引，跳过重复写入: {note_path} "
+                            f"(existing={index_result.existing_source})"
+                        )
+                        index_notice = "\n\n📚 记忆索引：这篇笔记已存在，已跳过重复索引。"
+                    elif index_result.chunks > 0:
+                        logger.info(f"自动索引上传笔记: {note_path}, {index_result.chunks} chunks")
+                        index_notice = f"\n\n📚 记忆索引：已新增 {index_result.chunks} 个笔记片段。"
             except Exception as e:
                 logger.warning(f"上传笔记自动索引失败: {e}")
         else:
             process_message = message
+        if index_notice:
+            chat_history[-1]["content"] += index_notice
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
         yield "", _copy_chat_history(chat_history), "", *_download_button_updates([]), gr.update(value="", visible=False), gr.update(visible=False), None
@@ -1581,6 +1598,51 @@ def create_chat_ui():
         .history-scroll ul,
         .history-scroll ol {
             margin-bottom: 0;
+        }
+        .history-task-card {
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            background: #f8fafc;
+            padding: 10px 12px;
+            margin: 8px 0;
+            color: #334155;
+            line-height: 1.65;
+            font-size: 13px;
+        }
+        .history-card-title {
+            color: var(--ca-text);
+            font-size: 14px;
+            font-weight: 750;
+            margin-bottom: 2px;
+        }
+        .history-card-meta {
+            color: var(--ca-muted);
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        .history-card-row,
+        .history-card-command {
+            display: grid;
+            grid-template-columns: 54px minmax(0, 1fr);
+            gap: 8px;
+            align-items: start;
+            margin-top: 6px;
+        }
+        .history-card-row span,
+        .history-card-command span {
+            color: var(--ca-muted);
+            font-weight: 650;
+        }
+        .history-task-card code {
+            display: inline-block;
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #ffffff;
+            padding: 2px 6px;
+            white-space: normal !important;
+            overflow-wrap: anywhere;
         }
         .hint-list {
             margin: 0;

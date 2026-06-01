@@ -15,7 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
-_SCHEMA_VERSION = 5
+_SCHEMA_VERSION = 6
 
 
 def _ensure_db():
@@ -366,6 +366,27 @@ def init_review_panels_table():
     conn.close()
 
 
+def init_indexed_notes_table():
+    """上传/索引笔记去重注册表。"""
+    conn = _get_conn()
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS indexed_notes (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_path     TEXT,
+            content_hash    TEXT    NOT NULL UNIQUE,
+            indexed_chunks  INTEGER DEFAULT 0,
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+            last_indexed_at TEXT    NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_indexed_notes_hash ON indexed_notes(content_hash);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def migrate_tasks_add_trace():
     """tasks 表增加 trace 字段（执行轨迹持久化）"""
     if not _column_exists("tasks", "trace"):
@@ -441,6 +462,7 @@ def init_db():
     init_conversation_turns_table()  # 记忆系统: 会话历史
     init_user_preferences_table()    # 记忆系统: 用户偏好
     init_review_panels_table()       # 审核面板
+    init_indexed_notes_table()       # 上传笔记去重
 
     # 更新 schema 版本
     _set_schema_version(_SCHEMA_VERSION)
@@ -705,6 +727,45 @@ def list_generated_turns(limit: int = 20) -> list:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def get_indexed_note_by_hash(content_hash: str) -> Optional[dict]:
+    """按内容 hash 查询已索引笔记记录。"""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT * FROM indexed_notes WHERE content_hash = ?",
+        (content_hash,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def save_indexed_note(source_path: str, content_hash: str, indexed_chunks: int) -> None:
+    """保存或更新笔记索引记录。"""
+    conn = _get_conn()
+    conn.execute(
+        """
+        INSERT INTO indexed_notes (source_path, content_hash, indexed_chunks, created_at, last_indexed_at)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+        ON CONFLICT(content_hash) DO UPDATE SET
+            source_path=excluded.source_path,
+            indexed_chunks=excluded.indexed_chunks,
+            last_indexed_at=datetime('now')
+        """,
+        (source_path, content_hash, indexed_chunks),
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_indexed_note(content_hash: str) -> bool:
+    """删除测试或维护用的索引记录。"""
+    conn = _get_conn()
+    cur = conn.execute("DELETE FROM indexed_notes WHERE content_hash = ?", (content_hash,))
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
 
 
 def clear_session(session_id: str) -> int:

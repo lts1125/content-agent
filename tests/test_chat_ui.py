@@ -133,6 +133,9 @@ class ChatProgressTest(unittest.TestCase):
 
         self.assertIn("近期生成历史", message)
         self.assertIn("修改 task chat_YYYYMMDD_HHMMSS", message)
+        self.assertIn("history-task-card", message)
+        self.assertIn("history-card-command", message)
+        self.assertIn("修改 task chat_20260601_150000，把开头写得更抓人", message)
         self.assertIn("公众号", message)
         self.assertIn("chat_20260601_150000", message)
         self.assertIn("gongzhonghao.md", message)
