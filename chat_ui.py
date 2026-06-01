@@ -1210,91 +1210,360 @@ def create_chat_ui():
     )
     
     with gr.Blocks(
-        title="Content Agent - 聊天模式",
+        title="Content Agent - 公众号内容生产工作台",
         theme=theme,
         css="""
-        .app-intro h1 { margin-bottom: 8px; }
-        .app-intro p { margin: 4px 0; }
-        .app-intro ul { margin: 6px 0 10px 20px; }
-        .input-box { margin-top: 8px; }
-        .publish-box { margin-top: 16px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fafafa; }
+        :root {
+            --ca-bg: #f6f8fb;
+            --ca-panel: #ffffff;
+            --ca-border: #e5e7eb;
+            --ca-muted: #64748b;
+            --ca-text: #0f172a;
+            --ca-blue: #4f63f6;
+            --ca-blue-soft: #eef2ff;
+            --ca-green: #10b981;
+            --ca-green-soft: #ecfdf5;
+            --ca-amber: #f59e0b;
+            --ca-shadow: 0 14px 40px rgba(15, 23, 42, 0.06);
+        }
+        .gradio-container {
+            background: var(--ca-bg) !important;
+        }
+        .workbench-shell {
+            max-width: 1480px;
+            margin: 0 auto;
+        }
+        .workbench-header {
+            padding: 14px 22px 14px;
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            background: var(--ca-panel);
+            box-shadow: var(--ca-shadow);
+            margin-bottom: 14px;
+        }
+        .header-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+        }
+        .brand-line {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--ca-text);
+            font-weight: 700;
+            font-size: 18px;
+        }
+        .brand-mark {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #4f63f6, #10b981);
+            box-shadow: 0 8px 20px rgba(79, 99, 246, 0.22);
+        }
+        .task-title {
+            margin-top: 10px;
+            font-size: 26px;
+            line-height: 1.2;
+            font-weight: 800;
+            color: var(--ca-text);
+            letter-spacing: 0;
+        }
+        .task-subtitle {
+            margin-top: 6px;
+            color: var(--ca-muted);
+            font-size: 14px;
+        }
+        .status-strip {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .status-pill {
+            border: 1px solid var(--ca-border);
+            border-radius: 999px;
+            padding: 6px 10px;
+            color: var(--ca-muted);
+            background: #fff;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .status-pill.active {
+            color: #3730a3;
+            background: var(--ca-blue-soft);
+            border-color: #c7d2fe;
+        }
+        .workflow-steps {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin-top: 14px;
+        }
+        .workflow-step {
+            min-height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            background: #f8fafc;
+            color: #475569;
+            font-weight: 650;
+            font-size: 14px;
+        }
+        .workflow-step.done {
+            background: var(--ca-green-soft);
+            border-color: #bbf7d0;
+            color: #047857;
+        }
+        .workflow-step.active {
+            background: var(--ca-blue-soft);
+            border-color: #c7d2fe;
+            color: #3730a3;
+        }
+        .main-workbench {
+            align-items: stretch;
+        }
+        .input-panel,
+        .result-panel,
+        .delivery-bar {
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            background: var(--ca-panel);
+            box-shadow: var(--ca-shadow);
+            padding: 18px !important;
+        }
+        .input-panel {
+            min-width: 320px;
+        }
+        .panel-title h3 {
+            margin: 0 0 4px;
+            color: var(--ca-text);
+            font-size: 18px;
+        }
+        .panel-title p {
+            margin: 0 0 14px;
+            color: var(--ca-muted);
+            font-size: 13px;
+        }
+        .preference-summary {
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            padding: 12px;
+            background: #f8fafc;
+            color: #334155;
+            font-size: 13px;
+            line-height: 1.7;
+            margin: 10px 0 12px;
+        }
+        .preference-summary strong {
+            color: var(--ca-text);
+        }
+        .primary-action-row button {
+            min-height: 44px;
+        }
+        .input-panel button.boundedheight {
+            min-height: 150px !important;
+            height: 150px !important;
+        }
+        .input-panel textarea {
+            min-height: 120px !important;
+        }
+        .secondary-actions button {
+            min-height: 36px;
+        }
+        .result-panel .wrap {
+            gap: 12px;
+        }
+        .chatbot {
+            border-radius: 8px !important;
+            border: 1px solid var(--ca-border) !important;
+        }
+        .support-panels {
+            margin-top: 12px;
+        }
+        .hint-list {
+            margin: 0;
+            padding-left: 18px;
+            color: #475569;
+            line-height: 1.7;
+            font-size: 13px;
+        }
+        .delivery-bar {
+            position: sticky;
+            bottom: 8px;
+            z-index: 20;
+            margin-top: 14px;
+            align-items: center;
+            gap: 12px;
+        }
+        .delivery-bar button {
+            min-height: 40px;
+        }
+        .delivery-title {
+            color: var(--ca-text);
+            font-size: 15px;
+            font-weight: 750;
+            margin-bottom: 4px;
+        }
+        .delivery-desc {
+            color: var(--ca-muted);
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+        .delivery-downloads {
+            gap: 8px;
+        }
+        .delivery-status textarea {
+            min-height: 42px !important;
+        }
+        .cover-upload-btn button {
+            min-height: 42px !important;
+            width: 100%;
+        }
+        @media (max-width: 900px) {
+            .workflow-steps {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .task-title {
+                font-size: 24px;
+            }
+            .delivery-bar {
+                position: static;
+            }
+        }
         """
     ) as demo:
         # 存储最后一次生成的公众号文件路径。State 必须创建在 Blocks 内，
         # 否则事件输出会引用未注册组件，导致 Gradio 前端/API 报错。
         last_gzh_file = gr.State("")
 
-        gr.Markdown("""
-        # 🤖 Content Agent - AI 内容创作助手
-        
-        用自然语言告诉我你想创作什么内容，我会自动分析、搜索资料、生成文案。示例："帮我写一篇关于 MCP 协议的公众号文章" / "生成小红书笔记：程序员颈椎拯救计划"
-        """, elem_classes=["app-intro"])
-        
-        # 聊天区域
-        chatbot = gr.Chatbot(
-            label="对话",
-            height=360,
-            type="messages",
-        )
-        
-        # 输入区域
-        with gr.Row():
-            msg_input = gr.Textbox(
-                label="输入消息",
-                placeholder="告诉我你想创作什么内容...",
-                scale=8,
-                show_label=False,
-            )
-            send_btn = gr.Button("发送", scale=1, variant="primary")
+        with gr.Column(elem_classes=["workbench-shell"]):
+            gr.HTML("""
+            <section class="workbench-header">
+              <div class="header-top">
+                <div>
+                  <div class="brand-line"><span class="brand-mark"></span><span>Content Agent</span></div>
+                  <div class="task-title">公众号文章生成</div>
+                  <div class="task-subtitle">把技术笔记整理成可审核、可下载、可保存到公众号草稿箱的文章。</div>
+                </div>
+                <div class="status-strip" aria-label="任务状态">
+                  <span class="status-pill">待输入</span>
+                  <span class="status-pill">生成中</span>
+                  <span class="status-pill active">待审核</span>
+                  <span class="status-pill">可发布</span>
+                </div>
+              </div>
+              <div class="workflow-steps" aria-label="生成流程">
+                <div class="workflow-step done">输入素材</div>
+                <div class="workflow-step done">生成文章</div>
+                <div class="workflow-step active">质量审核</div>
+                <div class="workflow-step">保存草稿</div>
+              </div>
+            </section>
+            """)
 
-        with gr.Row():
-            note_upload = gr.File(
-                label="上传笔记（.md / .txt，可选）",
-                file_types=[".md", ".txt"],
-                type="filepath",
-                scale=1,
-            )
-            with gr.Column(scale=1):
-                with gr.Row():
-                    download_gzh = gr.DownloadButton("⬇️ 公众号", visible=False, size="sm")
-                    download_xhs = gr.DownloadButton("⬇️ 小红书", visible=False, size="sm")
-                    download_dy = gr.DownloadButton("⬇️ 抖音", visible=False, size="sm")
-        
-        # 快捷按钮
-        with gr.Row():
-            btn_gzh = gr.Button("📱 公众号文章", size="sm")
-            btn_xhs = gr.Button("📕 小红书笔记", size="sm")
-            btn_dy = gr.Button("🎵 抖音文案", size="sm")
-            clear_btn = gr.Button("🗑️ 清空对话", size="sm", variant="secondary")
-        
-        # 小红书 HTML 预览
-        xhs_preview = gr.HTML(visible=False)
-
-        # 审核面板按钮（默认隐藏）
-        with gr.Row(visible=False) as review_row:
-            btn_revise = gr.Button("采纳修改", variant="primary", size="sm")
-            btn_ignore = gr.Button("忽略未通过项", size="sm")
-            btn_force = gr.Button("强行发布", variant="stop", size="sm")
-        review_state = gr.State(None)
-        
-        # 公众号发布区域
-        with gr.Accordion("📤 发布到公众号草稿箱", open=False):
-            with gr.Row(variant="panel"):
-                with gr.Column(scale=1):
-                    cover_upload = gr.Image(
-                        label="📷 公众号封面",
+            with gr.Row(elem_classes=["main-workbench"]):
+                with gr.Column(scale=4, elem_classes=["input-panel"]):
+                    gr.Markdown(
+                        "### 输入与偏好\n把笔记、主题和写作要求放在这里，默认优先生成公众号文章。",
+                        elem_classes=["panel-title"],
+                    )
+                    note_upload = gr.File(
+                        label="上传笔记（.md / .txt，可选）",
+                        file_types=[".md", ".txt"],
                         type="filepath",
-                        height=120,
+                    )
+                    msg_input = gr.Textbox(
+                        label="写作要求",
+                        placeholder="例如：根据这篇笔记生成公众号文章，写给普通技术人，通俗易懂，少用术语，多举真实例子。",
+                        lines=5,
+                        max_lines=9,
                         show_label=True,
                     )
-                with gr.Column(scale=2):
+                    gr.HTML("""
+                    <div class="preference-summary">
+                      <strong>当前默认</strong><br>
+                      平台：微信公众号<br>
+                      风格：通俗科普 / 技术深度可通过输入要求控制<br>
+                      历史记忆：开启，生成时会自动检索相关笔记
+                    </div>
+                    """)
+                    with gr.Row(elem_classes=["primary-action-row"]):
+                        send_btn = gr.Button("生成公众号文章", scale=2, variant="primary")
+                        clear_btn = gr.Button("清空对话", scale=1, variant="secondary")
+                    with gr.Row(elem_classes=["secondary-actions"]):
+                        btn_gzh = gr.Button("公众号文章", size="sm", variant="secondary")
+                        btn_xhs = gr.Button("小红书笔记", size="sm")
+                        btn_dy = gr.Button("抖音文案", size="sm")
+                    with gr.Accordion("记忆与历史入口", open=False):
+                        gr.Markdown(
+                            "- `#!sessions` 查看近期会话\n"
+                            "- `#!memory` 查看向量库状态\n"
+                            "- `#!search 关键词` 测试历史笔记检索\n"
+                            "- `#!index 路径` 手动索引笔记目录"
+                        )
+
+                with gr.Column(scale=8, elem_classes=["result-panel"]):
+                    gr.Markdown(
+                        "### 结果与过程\n生成进度、审核建议和文章结果会集中显示在这里。",
+                        elem_classes=["panel-title"],
+                    )
+                    chatbot = gr.Chatbot(
+                        label="生成过程与结果",
+                        height=420,
+                        type="messages",
+                        elem_classes=["chatbot"],
+                    )
+                    # 审核面板按钮（默认隐藏）
+                    with gr.Row(visible=False) as review_row:
+                        btn_revise = gr.Button("按建议修改", variant="primary", size="sm")
+                        btn_ignore = gr.Button("忽略建议", size="sm")
+                        btn_force = gr.Button("强行通过", variant="stop", size="sm")
+                    review_state = gr.State(None)
+
+                    # 小红书 HTML 预览
+                    xhs_preview = gr.HTML(visible=False)
+
+                    with gr.Accordion("引用来源与历史任务", open=False, elem_classes=["support-panels"]):
+                        gr.HTML("""
+                        <ul class="hint-list">
+                          <li>生成完成后，后续会在这里展示本次参考的历史笔记。</li>
+                          <li>历史任务中心会优先列出公众号文章、评分、文件和发布状态。</li>
+                          <li>当前版本可先通过系统命令查看 session 和 memory 状态。</li>
+                        </ul>
+                        """)
+
+            with gr.Row(elem_classes=["delivery-bar"]):
+                with gr.Column(scale=4):
+                    gr.HTML("""
+                    <div class="delivery-title">交付操作</div>
+                    <div class="delivery-desc">生成公众号文章后，先下载核对 Markdown，再上传封面并保存到公众号草稿箱。</div>
+                    """)
+                    with gr.Row(elem_classes=["delivery-downloads"]):
+                        download_gzh = gr.DownloadButton("下载公众号", visible=False, size="sm")
+                        download_xhs = gr.DownloadButton("下载小红书", visible=False, size="sm")
+                        download_dy = gr.DownloadButton("下载抖音", visible=False, size="sm")
+                with gr.Column(scale=3):
+                    cover_upload = gr.UploadButton(
+                        "上传公众号封面",
+                        file_types=["image"],
+                        type="filepath",
+                        elem_classes=["cover-upload-btn"],
+                    )
+                    gr.Markdown("支持 JPG / PNG。上传后可直接保存到公众号草稿箱。")
+                with gr.Column(scale=5):
                     pub_status = gr.Textbox(
                         label="发布状态",
-                        value="等待生成内容...",
+                        value="等待生成公众号内容...",
                         interactive=False,
                         show_label=True,
+                        elem_classes=["delivery-status"],
                     )
-                    publish_btn = gr.Button("📤 发布到公众号草稿箱", variant="primary", size="sm")
+                    publish_btn = gr.Button("保存到公众号草稿箱", variant="primary", size="sm")
         
         # 事件绑定
         send_btn.click(
