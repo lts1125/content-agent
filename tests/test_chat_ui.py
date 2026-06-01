@@ -45,6 +45,12 @@ class ChatProgressTest(unittest.TestCase):
 
     def test_respond_stream_yields_progress_before_final_response(self):
         class FakeAgent:
+            class Memory:
+                def get_preferences(self):
+                    return {}
+
+            memory = Memory()
+
             def process_message_stream(self, _message):
                 yield {
                     "type": "progress",
@@ -69,7 +75,8 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual("assistant", first_history[1]["role"])
         self.assertIn("🔄 分析需求", first_history[1]["content"])
         self.assertEqual("生成完成", final_history[-1]["content"])
-        self.assertEqual(9, len(updates[-1]))
+        self.assertEqual(10, len(updates[-1]))
+        self.assertIn("当前默认", updates[-1][-1])
 
     def test_save_generated_markdown_files_returns_platform_files(self):
         with TemporaryDirectory() as tmp_dir:
@@ -117,6 +124,135 @@ class ChatProgressTest(unittest.TestCase):
         message = chat_ui._format_memory_refs([])
 
         self.assertIn("未使用历史笔记", message)
+
+    def test_build_gongzhonghao_preference_context_maps_preferences(self):
+        context, applied = chat_ui._build_gongzhonghao_preference_context(
+            {
+                "gzh_target_reader": "普通技术人",
+                "gzh_default_style": "通俗科普",
+                "preferred_length": "medium",
+                "weak_dimensions": ["readability", "originality"],
+                "emoji_tendency": "low",
+            }
+        )
+
+        self.assertIn("公众号写作偏好", context)
+        self.assertIn("默认读者：普通技术人", context)
+        self.assertIn("默认风格：通俗科普", context)
+        self.assertIn("公众号目标 1200-1800 字", context)
+        self.assertIn("可读性弱项", context)
+        self.assertIn("原创性弱项", context)
+        self.assertIn("少用 emoji", context)
+        self.assertIn("默认读者：普通技术人", applied)
+        self.assertIn("默认风格：通俗科普", applied)
+
+    def test_current_writing_requirement_overrides_default_reader_and_style(self):
+        context, applied = chat_ui._build_gongzhonghao_preference_context(
+            {
+                "gzh_target_reader": "普通技术人",
+                "gzh_default_style": "通俗科普",
+                "preferred_length": "long",
+            },
+            {
+                "audience": "资深工程师",
+                "gongzhonghao_mode": "technical_depth",
+            },
+        )
+
+        self.assertNotIn("默认读者：普通技术人", context)
+        self.assertNotIn("默认风格：通俗科普", context)
+        self.assertIn("公众号目标 1800-2500 字", context)
+        self.assertNotIn("默认读者：普通技术人", applied)
+        self.assertNotIn("默认风格：通俗科普", applied)
+
+    def test_format_user_preferences_groups_gongzhonghao_settings(self):
+        message = chat_ui._format_user_preferences(
+            {
+                "gzh_default_style": "通俗科普",
+                "gzh_target_reader": "普通技术人",
+                "preferred_length": "medium",
+            }
+        )
+
+        self.assertIn("公众号写作", message)
+        self.assertIn("公众号默认风格", message)
+        self.assertIn("通俗科普", message)
+        self.assertIn("通用偏好", message)
+        self.assertIn("默认长度", message)
+
+    def test_format_preference_summary_html_uses_real_preferences(self):
+        html = chat_ui._format_preference_summary_html(
+            {
+                "gzh_target_reader": "普通技术人",
+                "gzh_default_style": "通俗科普",
+                "preferred_length": "medium",
+                "weak_dimensions": ["readability", "originality"],
+            }
+        )
+
+        self.assertIn("当前默认", html)
+        self.assertIn("默认读者：普通技术人", html)
+        self.assertIn("默认风格：通俗科普", html)
+        self.assertIn("长度：medium", html)
+        self.assertIn("弱项强化：readability、originality", html)
+
+    def test_preference_generation_status_shows_empty_state_for_gongzhonghao(self):
+        message = chat_ui._format_preference_generation_status([], ["gongzhonghao"])
+
+        self.assertIn("未设置公众号偏好", message)
+
+    def test_preference_generation_status_is_hidden_for_other_platforms(self):
+        message = chat_ui._format_preference_generation_status([], ["xiaohongshu"])
+
+        self.assertEqual("", message)
+
+    def test_parse_preference_value_supports_lists(self):
+        value = chat_ui._parse_preference_value("readability，originality")
+
+        self.assertEqual(["readability", "originality"], value)
+
+    def test_pref_command_sets_explicit_preference(self):
+        class FakeMemory:
+            def __init__(self):
+                self.prefs = {}
+
+            def set_preference(self, key, value, source="explicit", confidence=1.0):
+                self.prefs[key] = {
+                    "value": value,
+                    "source": source,
+                    "confidence": confidence,
+                }
+
+            def get_preferences(self):
+                return {key: item["value"] for key, item in self.prefs.items()}
+
+        agent = chat_ui.ChatAgent.__new__(chat_ui.ChatAgent)
+        agent.memory = FakeMemory()
+
+        result = chat_ui.ChatAgent._handle_system_command(
+            agent,
+            "#!pref gzh_default_style 通俗科普",
+        )
+
+        self.assertEqual("text", result["type"])
+        self.assertEqual("通俗科普", agent.memory.prefs["gzh_default_style"]["value"])
+        self.assertEqual("explicit", agent.memory.prefs["gzh_default_style"]["source"])
+        self.assertIn("公众号默认风格", result["content"])
+
+    def test_pref_command_without_args_shows_help_and_current_preferences(self):
+        class FakeMemory:
+            def get_preferences(self):
+                return {"gzh_default_style": "通俗科普"}
+
+        agent = chat_ui.ChatAgent.__new__(chat_ui.ChatAgent)
+        agent.memory = FakeMemory()
+
+        result = chat_ui.ChatAgent._handle_system_command(agent, "#!pref")
+
+        self.assertEqual("text", result["type"])
+        self.assertIn("公众号偏好设置", result["content"])
+        self.assertIn("#!pref gzh_default_style 通俗科普", result["content"])
+        self.assertIn("公众号默认风格", result["content"])
 
     def test_format_generated_history_lists_generated_files(self):
         items = [

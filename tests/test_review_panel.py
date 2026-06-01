@@ -511,7 +511,7 @@ class ChatUiReviewIntegrationTest(unittest.TestCase):
 
         self.assertGreaterEqual(len(updates), 2)
         final = updates[-1]
-        self.assertEqual(9, len(final))
+        self.assertEqual(10, len(final))
 
         review_row_update = final[7]
         self.assertTrue(review_row_update.get("visible", False))

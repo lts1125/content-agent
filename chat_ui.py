@@ -346,6 +346,248 @@ def _format_memory_refs(memory_refs: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return []
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        return [part.strip() for part in re.split(r"[,，、\s]+", value) if part.strip()]
+    return [value]
+
+
+def _build_gongzhonghao_preference_context(
+    prefs: dict,
+    writing_requirements: Optional[dict] = None,
+) -> tuple[str, list[str]]:
+    """把用户偏好映射成公众号生成约束，并返回给前台展示的摘要。"""
+    if not prefs:
+        return "", []
+
+    writing_requirements = writing_requirements or {}
+    constraints = [
+        "## 公众号写作偏好",
+        "",
+        "优先级：当前用户输入要求 > 公众号专属偏好 > 历史推断偏好。",
+    ]
+    applied = []
+
+    reader = prefs.get("gzh_target_reader")
+    if reader and not writing_requirements.get("audience"):
+        constraints.append(f"- 默认读者：{reader}")
+        applied.append(f"默认读者：{reader}")
+
+    style = prefs.get("gzh_default_style")
+    if style and not writing_requirements.get("gongzhonghao_mode"):
+        constraints.append(f"- 默认风格：{style}")
+        applied.append(f"默认风格：{style}")
+        if "通俗" in str(style):
+            constraints.append("- 按通俗科普方式写：少术语、多类比、多真实例子。")
+        elif "技术" in str(style):
+            constraints.append("- 按技术深度方式写：保留关键原理、边界和可复现细节。")
+        elif "复盘" in str(style):
+            constraints.append("- 按经验复盘方式写：突出问题、踩坑、取舍和结果。")
+
+    publish_goal = prefs.get("gzh_publish_goal")
+    if publish_goal:
+        constraints.append(f"- 发布目标：{publish_goal}")
+        applied.append(f"发布目标：{publish_goal}")
+
+    title_style = prefs.get("gzh_title_style")
+    if title_style:
+        constraints.append(f"- 标题倾向：{title_style}")
+        applied.append(f"标题倾向：{title_style}")
+
+    length_map = {
+        "short": "公众号目标 800-1200 字，保留重点，不展开过多背景。",
+        "medium": "公众号目标 1200-1800 字，结构完整但避免冗长。",
+        "long": "公众号目标 1800-2500 字，适合深度展开。",
+    }
+    length = prefs.get("preferred_length")
+    if length in length_map:
+        constraints.append(f"- 长度偏好：{length_map[length]}")
+        applied.append(f"长度：{length}")
+
+    weak_dimensions = _as_list(prefs.get("weak_dimensions"))
+    weak_rules = {
+        "readability": "可读性弱项：每个技术概念都要用一句人话解释，并补一个生活化类比或例子。",
+        "originality": "原创性弱项：加入个人项目经历、真实取舍或踩坑细节，避免泛泛而谈。",
+        "practicality": "实用性弱项：补充可执行步骤、检查清单或读者下一步可以做什么。",
+    }
+    for key, rule in weak_rules.items():
+        if key in weak_dimensions:
+            constraints.append(f"- {rule}")
+            applied.append(f"强化{rule.split('弱项')[0]}")
+
+    emoji_tendency = prefs.get("emoji_tendency")
+    if emoji_tendency == "low":
+        constraints.append("- 表达习惯：公众号正文少用 emoji，优先用清楚的小标题和短段落。")
+        applied.append("少用 emoji")
+
+    paragraph_tendency = prefs.get("paragraph_tendency")
+    if paragraph_tendency == "short":
+        constraints.append("- 段落习惯：短段落，每段尽量只讲一个意思。")
+        applied.append("短段落")
+    elif paragraph_tendency == "long":
+        constraints.append("- 段落习惯：章节可以完整，但单段不要过长，避免手机阅读压力。")
+        applied.append("章节完整")
+
+    custom = prefs.get("custom_prompt")
+    if custom:
+        constraints.append(f"- 自定义偏好：{custom}")
+        applied.append("自定义要求")
+
+    if not applied:
+        return "", []
+
+    return "\n".join(constraints), applied
+
+
+def _format_applied_preferences(applied: list[str]) -> str:
+    if not applied:
+        return ""
+    return "\n\n🧭 **本次应用的公众号偏好：** " + "；".join(applied)
+
+
+def _format_preference_generation_status(applied: list[str], platforms: list[str]) -> str:
+    if "gongzhonghao" not in platforms:
+        return ""
+    if applied:
+        return _format_applied_preferences(applied)
+    return "\n\n🧭 **本次应用的公众号偏好：** 未设置公众号偏好，本次仅按当前输入要求生成。"
+
+
+def _format_user_preferences(prefs: dict) -> str:
+    """把偏好从原始 key-value 转成用户可读的 Markdown。"""
+    if not prefs:
+        return "📝 当前没有设置偏好"
+
+    labels = {
+        "preferred_tone": "通用语气",
+        "favorite_platforms": "常用平台",
+        "preferred_length": "默认长度",
+        "custom_prompt": "自定义要求",
+        "weak_dimensions": "待强化维度",
+        "strong_dimensions": "优势维度",
+        "emoji_tendency": "Emoji 倾向",
+        "paragraph_tendency": "段落倾向",
+        "tag_tendency": "标签倾向",
+        "gzh_target_reader": "公众号默认读者",
+        "gzh_default_style": "公众号默认风格",
+        "gzh_publish_goal": "公众号发布目标",
+        "gzh_title_style": "公众号标题倾向",
+    }
+    gzh_keys = [key for key in labels if key.startswith("gzh_")]
+    general_keys = [key for key in labels if not key.startswith("gzh_")]
+    lines = ["📝 **用户偏好**", ""]
+
+    def add_section(title: str, keys: list[str]):
+        section_lines = []
+        for key in keys:
+            if key not in prefs:
+                continue
+            value = prefs[key]
+            if isinstance(value, list):
+                value = "、".join(str(item) for item in value)
+            section_lines.append(f"- **{labels[key]}**：{value}")
+        if section_lines:
+            lines.extend([f"### {title}", "", *section_lines, ""])
+
+    add_section("公众号写作", gzh_keys)
+    add_section("通用偏好", general_keys)
+
+    unknown = [key for key in prefs if key not in labels]
+    if unknown:
+        lines.extend(["### 其他", ""])
+        for key in unknown:
+            lines.append(f"- **{key}**：{prefs[key]}")
+
+    return "\n".join(lines).strip()
+
+
+def _format_preference_help(prefs: dict) -> str:
+    return (
+        "🧭 **公众号偏好设置**\n\n"
+        "你可以这样设置：\n\n"
+        "- `#!pref gzh_default_style 通俗科普`\n"
+        "- `#!pref gzh_target_reader 普通技术人`\n"
+        "- `#!pref preferred_length medium`\n"
+        "- `#!pref weak_dimensions readability，originality`\n\n"
+        "设置后再生成公众号文章，结果里会显示“本次应用的公众号偏好”。\n\n"
+        + _format_user_preferences(prefs)
+    )
+
+
+def _format_preference_summary_html(prefs: dict) -> str:
+    """渲染左侧当前默认偏好摘要。"""
+    reader = prefs.get("gzh_target_reader") or "未设置"
+    style = prefs.get("gzh_default_style") or "未设置，可在输入要求中临时控制"
+    length = prefs.get("preferred_length") or "未设置"
+    weak_dimensions = _as_list(prefs.get("weak_dimensions"))
+    weak_text = "、".join(str(item) for item in weak_dimensions) if weak_dimensions else "未设置"
+    custom = prefs.get("custom_prompt") or ""
+    custom_line = f"<br>自定义：{custom}" if custom else ""
+    return f"""
+    <div class="preference-summary">
+      <strong>当前默认</strong><br>
+      平台：微信公众号<br>
+      默认读者：{reader}<br>
+      默认风格：{style}<br>
+      长度：{length}<br>
+      弱项强化：{weak_text}<br>
+      历史记忆：开启，生成时会自动检索相关笔记{custom_line}
+    </div>
+    """
+
+
+def _get_agent_preferences(agent) -> dict:
+    memory = getattr(agent, "memory", None)
+    if memory is None or not hasattr(memory, "get_preferences"):
+        return {}
+    return memory.get_preferences()
+
+
+ALLOWED_PREFERENCE_KEYS = {
+    "preferred_tone",
+    "favorite_platforms",
+    "preferred_length",
+    "custom_prompt",
+    "weak_dimensions",
+    "strong_dimensions",
+    "emoji_tendency",
+    "paragraph_tendency",
+    "tag_tendency",
+    "gzh_target_reader",
+    "gzh_default_style",
+    "gzh_publish_goal",
+    "gzh_title_style",
+}
+
+
+def _parse_preference_value(value: str):
+    value = (value or "").strip()
+    if not value:
+        return ""
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        pass
+    if "," in value or "，" in value or "、" in value:
+        return [item.strip() for item in re.split(r"[,，、]+", value) if item.strip()]
+    return value
+
+
 def _format_generated_history(items: list[dict], limit: int = 8) -> str:
     """把生成历史渲染为 Markdown，供页面面板和系统命令复用。"""
     if not items:
@@ -906,6 +1148,15 @@ class ChatAgent:
                 search_result = execute_tool("search", query=topic[:200])
                 research_report = search_result.data if search_result.success else ""
                 raw_notes = _build_generation_notes(topic, research_report, intent)
+
+            applied_preferences = []
+            if "gongzhonghao" in platforms:
+                preference_context, applied_preferences = _build_gongzhonghao_preference_context(
+                    self.memory.get_preferences(),
+                    intent.get("writing_requirements", {}),
+                )
+                if preference_context:
+                    raw_notes = f"{raw_notes}\n\n{preference_context}"
             
             # 2. 选择策略
             strategy = self.selector.select(raw_notes)
@@ -925,6 +1176,8 @@ class ChatAgent:
             output_text = f"✅ 已生成 {len(platforms)} 个平台的内容\n\n"
             output_text += f"📋 使用策略: {strategy.name}\n"
             output_text += f"📊 评分: {result.get('verdict', {}).overall if result.get('verdict') else 'N/A'}/100\n\n"
+            output_text += _format_preference_generation_status(applied_preferences, platforms)
+            output_text += "\n\n"
             
             for platform in platforms:
                 text = getattr(content, platform, "")
@@ -1031,6 +1284,16 @@ class ChatAgent:
                 },
             }
 
+            # 注入公众号偏好约束：当前输入要求优先，长期偏好作为稳定默认值。
+            applied_preferences = []
+            if "gongzhonghao" in platforms:
+                preference_context, applied_preferences = _build_gongzhonghao_preference_context(
+                    self.memory.get_preferences(),
+                    intent.get("writing_requirements", {}),
+                )
+                if preference_context:
+                    raw_notes = f"{raw_notes}\n\n{preference_context}"
+
             # 注入记忆上下文，并保留引用来源用于前台展示
             memory_context, memory_refs = self._build_memory_context_with_refs(topic)
             if memory_context:
@@ -1090,7 +1353,11 @@ class ChatAgent:
                 task_id = getattr(self, "_current_task_id", self.session_id)
                 ReviewManager.save_panel(panel, task_id)
 
-                review_md = panel.to_markdown() + _format_memory_refs(memory_refs)
+                review_md = (
+                    panel.to_markdown()
+                    + _format_preference_generation_status(applied_preferences, platforms)
+                    + _format_memory_refs(memory_refs)
+                )
                 yield {
                     "type": "result",
                     "result": {
@@ -1100,6 +1367,7 @@ class ChatAgent:
                         "raw_content": content,
                         "platforms": platforms,
                         "memory_refs": memory_refs,
+                        "applied_preferences": applied_preferences,
                     },
                 }
                 return
@@ -1128,6 +1396,7 @@ class ChatAgent:
                 if text:
                     output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
             files = _save_generated_markdown_files(content, platforms, output_dir)
+            output_text += _format_preference_generation_status(applied_preferences, platforms)
             output_text += _format_memory_refs(memory_refs)
 
             yield {
@@ -1155,6 +1424,7 @@ class ChatAgent:
                     "platforms": platforms,
                     "files": files,
                     "memory_refs": memory_refs,
+                    "applied_preferences": applied_preferences,
                 },
             }
         except Exception as e:
@@ -1229,6 +1499,7 @@ class ChatAgent:
         - #!index [path] — 手动索引 Vault 或单个文件
         - #!search <query> — 测试向量检索
         - #!prefs — 查看当前用户偏好
+        - #!pref <key> <value> — 设置用户偏好
         - #!sessions — 列出近期会话
         - #!history — 列出近期生成历史
         - #!memory — 查看向量库状态
@@ -1263,13 +1534,47 @@ class ChatAgent:
             return {"type": "text", "content": "\n".join(lines)}
 
         if cmd == "prefs":
+            if arg.startswith("set "):
+                parts = arg.split(maxsplit=2)
+                if len(parts) < 3:
+                    return {
+                        "type": "text",
+                        "content": "❌ 用法：`#!prefs set gzh_default_style 通俗科普`",
+                    }
+                key, value_text = parts[1], parts[2]
+                if key not in ALLOWED_PREFERENCE_KEYS:
+                    return {
+                        "type": "text",
+                        "content": f"❌ 不支持的偏好键：{key}\n可用键：{', '.join(sorted(ALLOWED_PREFERENCE_KEYS))}",
+                    }
+                value = _parse_preference_value(value_text)
+                self.memory.set_preference(key, value, source="explicit", confidence=1.0)
+                return {
+                    "type": "text",
+                    "content": f"✅ 已设置偏好：`{key}` = {value}\n\n{_format_user_preferences(self.memory.get_preferences())}",
+                }
             prefs = self.memory.get_preferences()
-            if not prefs:
-                return {"type": "text", "content": "📝 当前没有设置偏好"}
-            lines = ["📝 用户偏好", ""]
-            for k, v in prefs.items():
-                lines.append(f"- **{k}**: {v}")
-            return {"type": "text", "content": "\n".join(lines)}
+            return {"type": "text", "content": _format_user_preferences(prefs)}
+
+        if cmd == "pref":
+            parts = arg.split(maxsplit=1)
+            if len(parts) < 2:
+                return {
+                    "type": "text",
+                    "content": _format_preference_help(self.memory.get_preferences()),
+                }
+            key, value_text = parts[0], parts[1]
+            if key not in ALLOWED_PREFERENCE_KEYS:
+                return {
+                    "type": "text",
+                    "content": f"❌ 不支持的偏好键：{key}\n可用键：{', '.join(sorted(ALLOWED_PREFERENCE_KEYS))}",
+                }
+            value = _parse_preference_value(value_text)
+            self.memory.set_preference(key, value, source="explicit", confidence=1.0)
+            return {
+                "type": "text",
+                "content": f"✅ 已设置偏好：`{key}` = {value}\n\n{_format_user_preferences(self.memory.get_preferences())}",
+            }
 
         if cmd == "sessions":
             sessions = self.memory.list_sessions(limit=10)
@@ -1300,6 +1605,7 @@ class ChatAgent:
 - `#!index [path]` — 索引 Vault 目录或单个文件
 - `#!search <query>` — 向量检索笔记
 - `#!prefs` — 查看用户偏好
+- `#!pref <key> <value>` — 设置偏好，例如 `#!pref gzh_default_style 通俗科普`
 - `#!sessions` — 列出近期会话
 - `#!history` — 列出近期生成历史
 - `#!memory` — 查看向量库状态
@@ -1401,7 +1707,16 @@ def _respond_stream(agent, message, chat_history, note_file=None):
             chat_history[-1]["content"] += index_notice
     except Exception as e:
         chat_history.append({"role": "assistant", "content": f"❌ 读取上传笔记失败: {e}"})
-        yield "", _copy_chat_history(chat_history), "", *_download_button_updates([]), gr.update(value="", visible=False), gr.update(visible=False), None
+        yield (
+            "",
+            _copy_chat_history(chat_history),
+            "",
+            *_download_button_updates([]),
+            gr.update(value="", visible=False),
+            gr.update(visible=False),
+            None,
+            _format_preference_summary_html(_get_agent_preferences(agent)),
+        )
         return
 
     progress_events = []
@@ -1418,7 +1733,16 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 progress_index = len(chat_history) - 1
             else:
                 chat_history[progress_index]["content"] = progress_content
-            yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False), gr.update(visible=False), None
+            yield (
+                "",
+                _copy_chat_history(chat_history),
+                gzh_path,
+                *_download_button_updates(download_files),
+                gr.update(value="", visible=False),
+                gr.update(visible=False),
+                None,
+                _format_preference_summary_html(_get_agent_preferences(agent)),
+            )
             continue
 
         if payload.get("type") == "result":
@@ -1448,6 +1772,7 @@ def _respond_stream(agent, message, chat_history, note_file=None):
                 gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html) and not show_review),
                 gr.update(visible=show_review),
                 review_panel_data,
+                _format_preference_summary_html(_get_agent_preferences(agent)),
             )
             return
 
@@ -1455,7 +1780,16 @@ def _respond_stream(agent, message, chat_history, note_file=None):
         chat_history[progress_index]["content"] = "⚠️ 生成流程没有返回结果，请重试。"
     else:
         chat_history.append({"role": "assistant", "content": "⚠️ 生成流程没有返回结果，请重试。"})
-    yield "", _copy_chat_history(chat_history), gzh_path, *_download_button_updates(download_files), gr.update(value="", visible=False), gr.update(visible=False), None
+    yield (
+        "",
+        _copy_chat_history(chat_history),
+        gzh_path,
+        *_download_button_updates(download_files),
+        gr.update(value="", visible=False),
+        gr.update(visible=False),
+        None,
+        _format_preference_summary_html(_get_agent_preferences(agent)),
+    )
 
 
 def create_chat_ui():
@@ -1470,7 +1804,15 @@ def create_chat_ui():
     def clear_history():
         """清空历史"""
         agent.reset_session()
-        return [], "", *_download_button_updates([]), gr.update(value="", visible=False), gr.update(visible=False), None
+        return (
+            [],
+            "",
+            *_download_button_updates([]),
+            gr.update(value="", visible=False),
+            gr.update(visible=False),
+            None,
+            _format_preference_summary_html(_get_agent_preferences(agent)),
+        )
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -1875,14 +2217,9 @@ def create_chat_ui():
                     with gr.Row(elem_classes=["primary-action-row"]):
                         send_btn = gr.Button("发送", scale=2, variant="primary")
                         clear_btn = gr.Button("清空对话", scale=1, variant="secondary")
-                    gr.HTML("""
-                    <div class="preference-summary">
-                      <strong>当前默认</strong><br>
-                      平台：微信公众号<br>
-                      风格：通俗科普 / 技术深度可通过输入要求控制<br>
-                      历史记忆：开启，生成时会自动检索相关笔记
-                    </div>
-                    """)
+                    preference_summary = gr.HTML(
+                        _format_preference_summary_html(_get_agent_preferences(agent))
+                    )
                     with gr.Row(elem_classes=["secondary-actions"]):
                         btn_gzh = gr.Button("公众号文章", size="sm", variant="secondary")
                         btn_xhs = gr.Button("小红书笔记", size="sm")
@@ -1963,18 +2300,18 @@ def create_chat_ui():
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot, note_upload],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         
         # 快捷按钮事件
@@ -1989,15 +2326,15 @@ def create_chat_ui():
         
         btn_gzh.click(
             quick_gzh,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         btn_xhs.click(
             quick_xhs,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         btn_dy.click(
             quick_dy,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         
         # 发布按钮事件
@@ -2113,6 +2450,7 @@ def create_chat_ui():
                     gr.update(value="", visible=False),
                     gr.update(visible=False),
                     None,
+                    _format_preference_summary_html(_get_agent_preferences(agent)),
                 )
                 return
 
@@ -2130,6 +2468,7 @@ def create_chat_ui():
                     gr.update(value="", visible=False),
                     gr.update(visible=False),
                     panel,
+                    _format_preference_summary_html(_get_agent_preferences(agent)),
                 )
                 return
 
@@ -2145,6 +2484,7 @@ def create_chat_ui():
                 gr.update(value="", visible=False),
                 gr.update(visible=False),
                 panel,
+                _format_preference_summary_html(_get_agent_preferences(agent)),
             )
 
             # 自动携带修改意见重新生成
@@ -2153,7 +2493,7 @@ def create_chat_ui():
         btn_revise.click(
             on_revise_generate,
             inputs=[review_state, chatbot],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         btn_ignore.click(
             lambda panel, hist: on_review_decision("ignore", panel, hist),
