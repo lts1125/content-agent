@@ -486,7 +486,7 @@ class ChatUiReviewIntegrationTest(unittest.TestCase):
         fake_panel.platforms = ["gongzhonghao"]
 
         class FakeAgent:
-            def process_message_stream(self, _message):
+            def process_message_stream(self, _message, **_kwargs):
                 yield {
                     "type": "progress",
                     "event": {

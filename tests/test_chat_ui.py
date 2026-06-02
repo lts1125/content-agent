@@ -51,7 +51,7 @@ class ChatProgressTest(unittest.TestCase):
 
             memory = Memory()
 
-            def process_message_stream(self, _message):
+            def process_message_stream(self, _message, **_kwargs):
                 yield {
                     "type": "progress",
                     "event": {
@@ -77,6 +77,47 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual("生成完成", final_history[-1]["content"])
         self.assertEqual(10, len(updates[-1]))
         self.assertIn("当前默认", updates[-1][-1])
+
+    def test_respond_stream_skips_upload_index_when_uploaded_only(self):
+        with TemporaryDirectory() as tmp_dir:
+            note_path = Path(tmp_dir) / "note.md"
+            note_path.write_text("# 笔记\n\n内容", encoding="utf-8")
+
+            class FakeAgent:
+                class Memory:
+                    def __init__(self):
+                        self.index_called = False
+
+                    def get_preferences(self):
+                        return {}
+
+                    def index_note_result(self, *_args, **_kwargs):
+                        self.index_called = True
+                        raise AssertionError("index_note_result should not be called")
+
+                def __init__(self):
+                    self.memory = self.Memory()
+
+                def process_message_stream(self, _message, **kwargs):
+                    self.kwargs = kwargs
+                    yield {
+                        "type": "result",
+                        "result": {"type": "text", "content": "生成完成"},
+                    }
+
+            agent = FakeAgent()
+            updates = list(chat_ui._respond_stream(
+                agent,
+                "生成公众号文章",
+                [],
+                str(note_path),
+                "只使用上传笔记",
+            ))
+
+        self.assertFalse(agent.memory.index_called)
+        self.assertEqual("uploaded_only", agent.kwargs["memory_mode"])
+        self.assertTrue(agent.kwargs["has_uploaded_note"])
+        self.assertNotIn("记忆索引", updates[-1][1][0]["content"])
 
     def test_save_generated_markdown_files_returns_platform_files(self):
         with TemporaryDirectory() as tmp_dir:
@@ -124,6 +165,22 @@ class ChatProgressTest(unittest.TestCase):
         message = chat_ui._format_memory_refs([])
 
         self.assertIn("未使用历史笔记", message)
+
+    def test_format_memory_usage_for_uploaded_only(self):
+        message = chat_ui._format_memory_usage([], "只使用上传笔记", has_uploaded_note=True)
+
+        self.assertIn("只使用上传笔记", message)
+        self.assertIn("未检索历史笔记", message)
+
+    def test_format_memory_usage_for_disabled_memory(self):
+        message = chat_ui._format_memory_usage([], "不使用历史记忆", has_uploaded_note=False)
+
+        self.assertIn("已关闭历史记忆", message)
+
+    def test_normalize_memory_mode_accepts_labels_and_values(self):
+        self.assertEqual("uploaded_only", chat_ui._normalize_memory_mode("只使用上传笔记"))
+        self.assertEqual("disabled", chat_ui._normalize_memory_mode("disabled"))
+        self.assertEqual("auto", chat_ui._normalize_memory_mode("未知"))
 
     def test_build_gongzhonghao_preference_context_maps_preferences(self):
         context, applied = chat_ui._build_gongzhonghao_preference_context(
@@ -270,6 +327,27 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("公众号偏好设置", result["content"])
         self.assertIn("#!pref gzh_default_style 通俗科普", result["content"])
         self.assertIn("公众号默认风格", result["content"])
+
+    def test_memory_context_can_skip_note_search(self):
+        class FakeMemory:
+            def get_preferences(self):
+                return {"preferred_length": "medium"}
+
+            def search_notes(self, *_args, **_kwargs):
+                raise AssertionError("search_notes should not be called")
+
+        agent = chat_ui.ChatAgent.__new__(chat_ui.ChatAgent)
+        agent.memory = FakeMemory()
+
+        context, refs = chat_ui.ChatAgent._build_memory_context_with_refs(
+            agent,
+            "AI Agent",
+            include_notes=False,
+        )
+
+        self.assertIn("用户偏好", context)
+        self.assertIn("长度偏好: medium", context)
+        self.assertEqual([], refs)
 
     def test_format_generated_history_lists_generated_files(self):
         items = [

@@ -159,6 +159,18 @@ PROGRESS_ICONS = {
     "pending": "○",
 }
 
+MEMORY_MODE_CHOICES = [
+    "自动使用历史笔记",
+    "只使用上传笔记",
+    "不使用历史记忆",
+]
+
+MEMORY_MODE_VALUES = {
+    "自动使用历史笔记": "auto",
+    "只使用上传笔记": "uploaded_only",
+    "不使用历史记忆": "disabled",
+}
+
 REVISION_TASK_RE = re.compile(r"(chat_\d{8}_\d{6})")
 REVISION_KEYWORDS = [
     "刚才那篇",
@@ -344,6 +356,25 @@ def _format_memory_refs(memory_refs: list[dict]) -> str:
         if snippet:
             lines.append(f"   - {snippet[:120]}...")
     return "\n".join(lines)
+
+
+def _normalize_memory_mode(memory_mode: str) -> str:
+    if memory_mode in MEMORY_MODE_VALUES:
+        return MEMORY_MODE_VALUES[memory_mode]
+    if memory_mode in set(MEMORY_MODE_VALUES.values()):
+        return memory_mode
+    return "auto"
+
+
+def _format_memory_usage(memory_refs: list[dict], memory_mode: str, has_uploaded_note: bool) -> str:
+    mode = _normalize_memory_mode(memory_mode)
+    if mode == "disabled":
+        return "\n\n📚 **本次参考资料：** 已关闭历史记忆，仅基于当前输入生成。"
+    if mode == "uploaded_only":
+        if has_uploaded_note:
+            return "\n\n📚 **本次参考资料：** 只使用上传笔记，未检索历史笔记。"
+        return "\n\n📚 **本次参考资料：** 已选择“只使用上传笔记”，但本次未上传笔记；未检索历史笔记。"
+    return _format_memory_refs(memory_refs)
 
 
 def _as_list(value) -> list:
@@ -1043,7 +1074,7 @@ class ChatAgent:
                 "content": "我不太理解你的需求。你可以说：\n- '帮我写一篇关于XXX的公众号文章'\n- '生成小红书笔记：程序员健身指南'\n- '把这篇笔记改写成抖音文案'",
             }
 
-    def process_message_stream(self, user_message: str):
+    def process_message_stream(self, user_message: str, memory_mode: str = "auto", has_uploaded_note: bool = False):
         """处理用户消息，并产出可用于 UI 的进度事件。"""
         logger.info(f"用户消息: {user_message}")
 
@@ -1080,7 +1111,7 @@ class ChatAgent:
                     "detail": f"已识别目标平台：{labels}",
                 },
             }
-            yield from self._handle_generate_stream(intent, user_message)
+            yield from self._handle_generate_stream(intent, user_message, memory_mode, has_uploaded_note)
             return
 
         if intent["type"] == "help":
@@ -1210,12 +1241,19 @@ class ChatAgent:
                 "content": f"生成失败: {str(e)}",
             }
 
-    def _handle_generate_stream(self, intent: dict, original_message: str):
+    def _handle_generate_stream(
+        self,
+        intent: dict,
+        original_message: str,
+        memory_mode: str = "auto",
+        has_uploaded_note: bool = False,
+    ):
         """处理生成请求，并在关键阶段产出进度事件。"""
         platforms = intent["platforms"]
         topic = intent["topic"] or original_message
         has_source_material = intent.get("has_source_material", False)
         revision_meta = None
+        normalized_memory_mode = _normalize_memory_mode(memory_mode)
         if not topic or len(topic) < 5:
             topic = original_message
 
@@ -1302,8 +1340,13 @@ class ChatAgent:
                 if preference_context:
                     raw_notes = f"{raw_notes}\n\n{preference_context}"
 
-            # 注入记忆上下文，并保留引用来源用于前台展示
-            memory_context, memory_refs = self._build_memory_context_with_refs(topic)
+            # 注入记忆上下文，并保留引用来源用于前台展示。
+            # 记忆模式只控制历史笔记检索，不关闭用户偏好。
+            include_memory_notes = normalized_memory_mode == "auto"
+            memory_context, memory_refs = self._build_memory_context_with_refs(
+                topic,
+                include_notes=include_memory_notes,
+            )
             if memory_context:
                 raw_notes = f"{raw_notes}\n\n{memory_context}"
 
@@ -1364,7 +1407,7 @@ class ChatAgent:
                 review_md = (
                     panel.to_markdown()
                     + _format_preference_generation_status(applied_preferences, platforms)
-                    + _format_memory_refs(memory_refs)
+                    + _format_memory_usage(memory_refs, normalized_memory_mode, has_uploaded_note)
                 )
                 yield {
                     "type": "result",
@@ -1405,7 +1448,7 @@ class ChatAgent:
                     output_text += f"---\n\n### {PLATFORM_LABELS.get(platform, platform)}\n\n{text[:500]}...\n\n"
             files = _save_generated_markdown_files(content, platforms, output_dir)
             output_text += _format_preference_generation_status(applied_preferences, platforms)
-            output_text += _format_memory_refs(memory_refs)
+            output_text += _format_memory_usage(memory_refs, normalized_memory_mode, has_uploaded_note)
 
             yield {
                 "type": "progress",
@@ -1625,7 +1668,7 @@ class ChatAgent:
     def _build_memory_context(self, topic: str) -> str:
         return self._build_memory_context_with_refs(topic)[0]
 
-    def _build_memory_context_with_refs(self, topic: str) -> tuple[str, list[dict]]:
+    def _build_memory_context_with_refs(self, topic: str, include_notes: bool = True) -> tuple[str, list[dict]]:
         """构建记忆上下文：包含用户偏好和相关笔记检索结果。
 
         返回 (上下文文本, 引用来源列表)。
@@ -1652,6 +1695,9 @@ class ChatAgent:
             if pref_lines:
                 parts.append("## 用户偏好\n" + "\n".join(f"- {l}" for l in pref_lines))
 
+        if not include_notes:
+            return "\n\n".join(parts), memory_refs
+
         # 2. 向量检索相关笔记
         try:
             notes = self.memory.search_notes(topic, top_k=3, min_score=0.4)
@@ -1676,9 +1722,11 @@ class ChatAgent:
 
 # ==================== Gradio 界面 ====================
 
-def _respond_stream(agent, message, chat_history, note_file=None):
+def _respond_stream(agent, message, chat_history, note_file=None, memory_mode: str = "auto"):
     """Gradio 流式响应：先显示进度，再替换为最终结果。"""
     display_message = message
+    normalized_memory_mode = _normalize_memory_mode(memory_mode)
+    has_uploaded_note = bool(note_file)
     if note_file:
         note_path = _uploaded_file_path(note_file)
         if note_path:
@@ -1693,22 +1741,23 @@ def _respond_stream(agent, message, chat_history, note_file=None):
         index_notice = ""
         if note_file and not is_system_cmd:
             process_message = _merge_uploaded_note_with_message(message, note_file)
-            # 用户上传笔记后自动索引到向量库
-            try:
-                note_path = _uploaded_file_path(note_file)
-                if note_path:
-                    index_result = agent.memory.index_note_result(str(note_path))
-                    if index_result.skipped:
-                        logger.info(
-                            f"上传笔记已索引，跳过重复写入: {note_path} "
-                            f"(existing={index_result.existing_source})"
-                        )
-                        index_notice = "\n\n📚 记忆索引：这篇笔记已存在，已跳过重复索引。"
-                    elif index_result.chunks > 0:
-                        logger.info(f"自动索引上传笔记: {note_path}, {index_result.chunks} chunks")
-                        index_notice = f"\n\n📚 记忆索引：已新增 {index_result.chunks} 个笔记片段。"
-            except Exception as e:
-                logger.warning(f"上传笔记自动索引失败: {e}")
+            if normalized_memory_mode == "auto":
+                # 用户上传笔记后自动索引到向量库。手动选择“只用上传笔记/关闭历史记忆”时，不写入历史记忆。
+                try:
+                    note_path = _uploaded_file_path(note_file)
+                    if note_path:
+                        index_result = agent.memory.index_note_result(str(note_path))
+                        if index_result.skipped:
+                            logger.info(
+                                f"上传笔记已索引，跳过重复写入: {note_path} "
+                                f"(existing={index_result.existing_source})"
+                            )
+                            index_notice = "\n\n📚 记忆索引：这篇笔记已存在，已跳过重复索引。"
+                        elif index_result.chunks > 0:
+                            logger.info(f"自动索引上传笔记: {note_path}, {index_result.chunks} chunks")
+                            index_notice = f"\n\n📚 记忆索引：已新增 {index_result.chunks} 个笔记片段。"
+                except Exception as e:
+                    logger.warning(f"上传笔记自动索引失败: {e}")
         else:
             process_message = message
         if index_notice:
@@ -1732,7 +1781,11 @@ def _respond_stream(agent, message, chat_history, note_file=None):
     gzh_path = ""
     download_files = []
 
-    for payload in agent.process_message_stream(process_message):
+    for payload in agent.process_message_stream(
+        process_message,
+        memory_mode=normalized_memory_mode,
+        has_uploaded_note=has_uploaded_note,
+    ):
         if payload.get("type") == "progress":
             progress_events = _merge_progress_event(progress_events, payload["event"])
             progress_content = _format_progress_message(progress_events)
@@ -1805,9 +1858,9 @@ def create_chat_ui():
     init_db()  # 确保数据库表已创建
     agent = ChatAgent()
 
-    def respond(message, chat_history, note_file=None):
+    def respond(message, chat_history, note_file=None, memory_mode="自动使用历史笔记"):
         """处理用户消息"""
-        yield from _respond_stream(agent, message, chat_history, note_file)
+        yield from _respond_stream(agent, message, chat_history, note_file, memory_mode)
     
     def clear_history():
         """清空历史"""
@@ -2235,6 +2288,12 @@ def create_chat_ui():
                         file_types=[".md", ".txt"],
                         type="filepath",
                     )
+                    memory_mode = gr.Radio(
+                        label="历史笔记引用",
+                        choices=MEMORY_MODE_CHOICES,
+                        value="自动使用历史笔记",
+                        interactive=True,
+                    )
                     msg_input = gr.Textbox(
                         label="写作要求",
                         placeholder="例如：根据这篇笔记生成公众号文章，写给普通技术人，通俗易懂，少用术语，多举真实例子。",
@@ -2361,13 +2420,13 @@ def create_chat_ui():
         # 事件绑定
         send_btn.click(
             respond,
-            inputs=[msg_input, chatbot, note_upload],
+            inputs=[msg_input, chatbot, note_upload, memory_mode],
             outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         
         msg_input.submit(
             respond,
-            inputs=[msg_input, chatbot, note_upload],
+            inputs=[msg_input, chatbot, note_upload, memory_mode],
             outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
         )
         
