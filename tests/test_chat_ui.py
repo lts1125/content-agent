@@ -29,8 +29,25 @@ class ChatUiConfigTest(unittest.TestCase):
 
         self.assertIsInstance(api_info, dict)
 
+    def test_creator_workflow_entry_is_visible_in_ui_config(self):
+        demo = chat_ui.create_chat_ui()
+        labels = json.dumps(demo.get_config_file(), ensure_ascii=False, default=str)
+
+        self.assertIn("创作者工作流", labels)
+        self.assertIn("一键内容复用", labels)
+
 
 class ChatProgressTest(unittest.TestCase):
+    def test_creator_workflow_prompt_requests_multi_platform_delivery(self):
+        prompt = chat_ui._creator_workflow_prompt()
+
+        self.assertIn("创作者内容复用工作流", prompt)
+        self.assertIn("公众号", prompt)
+        self.assertIn("小红书", prompt)
+        self.assertIn("抖音", prompt)
+        self.assertIn("标题库", prompt)
+        self.assertIn("发布日历", prompt)
+
     def test_progress_message_marks_done_running_and_pending_steps(self):
         message = chat_ui._format_progress_message([
             {"step": "analyze", "title": "分析需求", "status": "done", "detail": "已识别目标平台：公众号"},

@@ -622,6 +622,20 @@ def _format_preference_summary_html(prefs: dict) -> str:
     """
 
 
+def _creator_workflow_prompt() -> str:
+    return (
+        "创作者内容复用工作流：请根据我提供的素材，生成一套可直接交付的多平台内容资产。\n\n"
+        "【目标平台】gongzhonghao,xiaohongshu,douyin\n\n"
+        "请输出：\n"
+        "1. 公众号长文：结构完整，适合知识型创作者发布。\n"
+        "2. 小红书笔记：标题抓人、要点清晰，适合图文卡片。\n"
+        "3. 抖音口播脚本：开头有钩子，短句表达，包含画面提示。\n"
+        "4. 标题库：给每个平台至少 3 个备选标题。\n"
+        "5. 发布日历：给出未来 7 天的内容拆分建议。\n\n"
+        "如果我上传了笔记，请优先忠实复用上传素材；如果没有上传，请先围绕输入主题生成。"
+    )
+
+
 def _get_agent_preferences(agent) -> dict:
     memory = getattr(agent, "memory", None)
     if memory is None or not hasattr(memory, "get_preferences"):
@@ -2332,8 +2346,8 @@ def create_chat_ui():
               <div class="header-top">
                 <div>
                   <div class="brand-line"><span class="brand-mark"></span><span>Content Agent</span></div>
-                  <div class="task-title">公众号文章生成</div>
-                  <div class="task-subtitle">把技术笔记整理成可审核、可下载、可保存到公众号草稿箱的文章。</div>
+                  <div class="task-title">创作者内容复用工作台</div>
+                  <div class="task-subtitle">一键内容复用：把文章、课程笔记或零散想法整理成公众号、小红书和抖音内容资产。</div>
                 </div>
                 <div class="status-strip" aria-label="任务状态">
                   <span class="status-pill">待输入</span>
@@ -2344,9 +2358,9 @@ def create_chat_ui():
               </div>
               <div class="workflow-steps" aria-label="生成流程">
                 <div class="workflow-step done">输入素材</div>
-                <div class="workflow-step done">生成文章</div>
+                <div class="workflow-step done">多平台生成</div>
                 <div class="workflow-step active">质量审核</div>
-                <div class="workflow-step">保存草稿</div>
+                <div class="workflow-step">交付发布</div>
               </div>
             </section>
             """)
@@ -2354,7 +2368,7 @@ def create_chat_ui():
             with gr.Row(elem_classes=["main-workbench"]):
                 with gr.Column(scale=4, elem_classes=["input-panel"]):
                     gr.Markdown(
-                        "### 输入与偏好\n把笔记、主题和写作要求放在这里，默认优先生成公众号文章。",
+                        "### 输入与偏好\n上传素材或输入主题，优先走创作者工作流，也可以单独生成某个平台内容。",
                         elem_classes=["panel-title"],
                     )
                     note_upload = gr.File(
@@ -2416,6 +2430,7 @@ def create_chat_ui():
                             visible=False,
                         )
                     with gr.Row(elem_classes=["secondary-actions"]):
+                        btn_creator = gr.Button("创作者工作流", size="sm", variant="primary")
                         btn_gzh = gr.Button("公众号文章", size="sm", variant="secondary")
                         btn_xhs = gr.Button("小红书笔记", size="sm")
                         btn_dy = gr.Button("抖音文案", size="sm")
@@ -2520,6 +2535,9 @@ def create_chat_ui():
         )
         
         # 快捷按钮事件
+        def quick_creator(note_file=None, memory_mode="自动使用历史笔记"):
+            yield from _respond_stream(agent, _creator_workflow_prompt(), [], note_file, memory_mode)
+
         def quick_gzh():
             yield from _respond_stream(agent, "帮我写一篇技术文章的公众号版本", [], None)
         
@@ -2529,6 +2547,11 @@ def create_chat_ui():
         def quick_dy():
             yield from _respond_stream(agent, "生成抖音口播脚本", [], None)
         
+        btn_creator.click(
+            quick_creator,
+            inputs=[note_upload, memory_mode],
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+        )
         btn_gzh.click(
             quick_gzh,
             outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
