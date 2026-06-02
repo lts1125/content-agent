@@ -36,6 +36,15 @@ class ChatUiConfigTest(unittest.TestCase):
         self.assertIn("创作者工作流", labels)
         self.assertIn("一键内容复用", labels)
 
+    def test_creator_profile_controls_are_visible_in_ui_config(self):
+        demo = chat_ui.create_chat_ui()
+        labels = json.dumps(demo.get_config_file(), ensure_ascii=False, default=str)
+
+        self.assertIn("创作者账号定位", labels)
+        self.assertIn("账号领域", labels)
+        self.assertIn("目标受众", labels)
+        self.assertIn("人设语气", labels)
+
 
 class ChatProgressTest(unittest.TestCase):
     def test_creator_workflow_prompt_requests_multi_platform_delivery(self):
@@ -47,6 +56,35 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("抖音", prompt)
         self.assertIn("标题库", prompt)
         self.assertIn("发布日历", prompt)
+
+    def test_creator_profile_context_formats_account_positioning(self):
+        context, applied = chat_ui._build_creator_profile_context({
+            "creator_domain": "AI 工具",
+            "creator_audience": "职场创作者",
+            "creator_persona": "专业但接地气",
+            "creator_forbidden_phrases": ["家人们", "割韭菜"],
+            "creator_columns": ["工具测评", "实战教程"],
+            "creator_benchmark_accounts": "某 AI 工具博主",
+        })
+
+        self.assertIn("创作者账号定位", context)
+        self.assertIn("账号领域：AI 工具", context)
+        self.assertIn("目标受众：职场创作者", context)
+        self.assertIn("人设语气：专业但接地气", context)
+        self.assertIn("禁用表达：家人们、割韭菜", context)
+        self.assertIn("固定栏目：工具测评、实战教程", context)
+        self.assertIn("标杆账号：某 AI 工具博主", context)
+        self.assertIn("账号领域：AI 工具", applied)
+
+    def test_creator_workflow_prompt_includes_creator_profile(self):
+        prompt = chat_ui._creator_workflow_prompt({
+            "creator_domain": "AI 工具",
+            "creator_audience": "职场创作者",
+        })
+
+        self.assertIn("创作者账号定位", prompt)
+        self.assertIn("账号领域：AI 工具", prompt)
+        self.assertIn("目标受众：职场创作者", prompt)
 
     def test_progress_message_marks_done_running_and_pending_steps(self):
         message = chat_ui._format_progress_message([

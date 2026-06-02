@@ -558,9 +558,19 @@ def _format_user_preferences(prefs: dict) -> str:
         "gzh_default_style": "公众号默认风格",
         "gzh_publish_goal": "公众号发布目标",
         "gzh_title_style": "公众号标题倾向",
+        "creator_domain": "账号领域",
+        "creator_audience": "目标受众",
+        "creator_persona": "人设语气",
+        "creator_forbidden_phrases": "禁用表达",
+        "creator_columns": "固定栏目",
+        "creator_benchmark_accounts": "标杆账号",
     }
     gzh_keys = [key for key in labels if key.startswith("gzh_")]
-    general_keys = [key for key in labels if not key.startswith("gzh_")]
+    creator_keys = [key for key in labels if key.startswith("creator_")]
+    general_keys = [
+        key for key in labels
+        if not key.startswith("gzh_") and not key.startswith("creator_")
+    ]
     lines = ["📝 **用户偏好**", ""]
 
     def add_section(title: str, keys: list[str]):
@@ -576,6 +586,7 @@ def _format_user_preferences(prefs: dict) -> str:
             lines.extend([f"### {title}", "", *section_lines, ""])
 
     add_section("公众号写作", gzh_keys)
+    add_section("创作者账号定位", creator_keys)
     add_section("通用偏好", general_keys)
 
     unknown = [key for key in prefs if key not in labels]
@@ -605,6 +616,9 @@ def _format_preference_summary_html(prefs: dict) -> str:
     reader = prefs.get("gzh_target_reader") or "未设置"
     style = prefs.get("gzh_default_style") or "未设置，可在输入要求中临时控制"
     length = prefs.get("preferred_length") or "未设置"
+    domain = prefs.get("creator_domain") or "未设置"
+    audience = prefs.get("creator_audience") or "未设置"
+    persona = prefs.get("creator_persona") or "未设置"
     weak_dimensions = _as_list(prefs.get("weak_dimensions"))
     weak_text = "、".join(str(item) for item in weak_dimensions) if weak_dimensions else "未设置"
     custom = prefs.get("custom_prompt") or ""
@@ -615,6 +629,9 @@ def _format_preference_summary_html(prefs: dict) -> str:
       平台：微信公众号<br>
       默认读者：{reader}<br>
       默认风格：{style}<br>
+      账号领域：{domain}<br>
+      目标受众：{audience}<br>
+      人设语气：{persona}<br>
       长度：{length}<br>
       弱项强化：{weak_text}<br>
       历史记忆：开启，生成时会自动检索相关笔记{custom_line}
@@ -622,8 +639,52 @@ def _format_preference_summary_html(prefs: dict) -> str:
     """
 
 
-def _creator_workflow_prompt() -> str:
-    return (
+def _format_creator_profile_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "、".join(str(item).strip() for item in value if str(item).strip())
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return "、".join(str(item).strip() for item in parsed if str(item).strip())
+        except json.JSONDecodeError:
+            pass
+        if "," in text or "，" in text or "、" in text:
+            return "、".join(part.strip() for part in re.split(r"[,，、]+", text) if part.strip())
+        return text
+    return str(value).strip()
+
+
+def _build_creator_profile_context(prefs: dict) -> tuple[str, list[str]]:
+    field_specs = [
+        ("creator_domain", "账号领域"),
+        ("creator_audience", "目标受众"),
+        ("creator_persona", "人设语气"),
+        ("creator_forbidden_phrases", "禁用表达"),
+        ("creator_columns", "固定栏目"),
+        ("creator_benchmark_accounts", "标杆账号"),
+    ]
+    lines = []
+    applied = []
+    for key, label in field_specs:
+        value = _format_creator_profile_value((prefs or {}).get(key))
+        if not value:
+            continue
+        line = f"{label}：{value}"
+        lines.append(f"- {line}")
+        applied.append(line)
+    if not lines:
+        return "", []
+    return "## 创作者账号定位\n\n" + "\n".join(lines), applied
+
+
+def _creator_workflow_prompt(prefs: Optional[dict] = None) -> str:
+    prompt = (
         "创作者内容复用工作流：请根据我提供的素材，生成一套可直接交付的多平台内容资产。\n\n"
         "【目标平台】gongzhonghao,xiaohongshu,douyin\n\n"
         "请输出：\n"
@@ -634,6 +695,10 @@ def _creator_workflow_prompt() -> str:
         "5. 发布日历：给出未来 7 天的内容拆分建议。\n\n"
         "如果我上传了笔记，请优先忠实复用上传素材；如果没有上传，请先围绕输入主题生成。"
     )
+    profile_context, _ = _build_creator_profile_context(prefs or {})
+    if profile_context:
+        prompt = f"{prompt}\n\n{profile_context}"
+    return prompt
 
 
 def _get_agent_preferences(agent) -> dict:
@@ -657,6 +722,12 @@ ALLOWED_PREFERENCE_KEYS = {
     "gzh_default_style",
     "gzh_publish_goal",
     "gzh_title_style",
+    "creator_domain",
+    "creator_audience",
+    "creator_persona",
+    "creator_forbidden_phrases",
+    "creator_columns",
+    "creator_benchmark_accounts",
 }
 
 
@@ -679,6 +750,19 @@ def _preference_control_defaults(prefs: dict) -> tuple[str, str, str, list[str]]
     length = prefs.get("preferred_length") or "未设置"
     weak_dimensions = _as_list(prefs.get("weak_dimensions"))
     return reader, style, length, weak_dimensions
+
+
+def _creator_profile_defaults(prefs: dict) -> tuple[str, str, str, str, str, str]:
+    forbidden = _format_creator_profile_value(prefs.get("creator_forbidden_phrases"))
+    columns = _format_creator_profile_value(prefs.get("creator_columns"))
+    return (
+        prefs.get("creator_domain") or "",
+        prefs.get("creator_audience") or "",
+        prefs.get("creator_persona") or "",
+        forbidden,
+        columns,
+        prefs.get("creator_benchmark_accounts") or "",
+    )
 
 
 def _format_generated_history(items: list[dict], limit: int = 8) -> str:
@@ -1948,6 +2032,26 @@ def create_chat_ui():
             _format_preference_summary_html(prefs),
             _format_user_preferences(prefs),
         )
+
+    def save_creator_profile_controls(domain, audience, persona, forbidden, columns, benchmarks):
+        """保存创作者账号定位。"""
+        selections = {
+            "creator_domain": domain,
+            "creator_audience": audience,
+            "creator_persona": persona,
+            "creator_forbidden_phrases": _parse_preference_value(forbidden),
+            "creator_columns": _parse_preference_value(columns),
+            "creator_benchmark_accounts": benchmarks,
+        }
+        for key, value in selections.items():
+            agent.memory.set_preference(key, value or "", source="explicit", confidence=1.0)
+
+        prefs = agent.memory.get_preferences()
+        return (
+            "✅ 已保存创作者账号定位",
+            _format_preference_summary_html(prefs),
+            _format_user_preferences(prefs),
+        )
     
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
@@ -2398,6 +2502,14 @@ def create_chat_ui():
                     pref_reader_default, pref_style_default, pref_length_default, pref_weak_default = _preference_control_defaults(
                         _get_agent_preferences(agent)
                     )
+                    (
+                        creator_domain_default,
+                        creator_audience_default,
+                        creator_persona_default,
+                        creator_forbidden_default,
+                        creator_columns_default,
+                        creator_benchmarks_default,
+                    ) = _creator_profile_defaults(_get_agent_preferences(agent))
                     with gr.Accordion("公众号偏好设置", open=False):
                         pref_reader = gr.Dropdown(
                             label="默认读者",
@@ -2429,6 +2541,45 @@ def create_chat_ui():
                             _format_user_preferences(_get_agent_preferences(agent)),
                             visible=False,
                         )
+                    with gr.Accordion("创作者账号定位", open=False):
+                        creator_domain = gr.Textbox(
+                            label="账号领域",
+                            value=creator_domain_default,
+                            placeholder="例如：AI 工具、职场成长、技术科普",
+                            lines=1,
+                        )
+                        creator_audience = gr.Textbox(
+                            label="目标受众",
+                            value=creator_audience_default,
+                            placeholder="例如：职场创作者、技术小白、独立开发者",
+                            lines=1,
+                        )
+                        creator_persona = gr.Textbox(
+                            label="人设语气",
+                            value=creator_persona_default,
+                            placeholder="例如：专业但接地气、温和理性、有实战经验",
+                            lines=1,
+                        )
+                        creator_forbidden = gr.Textbox(
+                            label="禁用表达",
+                            value=creator_forbidden_default,
+                            placeholder="用逗号分隔，例如：家人们，割韭菜，暴富",
+                            lines=1,
+                        )
+                        creator_columns = gr.Textbox(
+                            label="固定栏目",
+                            value=creator_columns_default,
+                            placeholder="用逗号分隔，例如：工具测评，实战教程，每周复盘",
+                            lines=1,
+                        )
+                        creator_benchmarks = gr.Textbox(
+                            label="标杆账号",
+                            value=creator_benchmarks_default,
+                            placeholder="可写账号名或风格参考，只提炼表达特征",
+                            lines=1,
+                        )
+                        save_creator_profile_btn = gr.Button("保存账号定位", size="sm", variant="secondary")
+                        creator_profile_status = gr.Markdown("")
                     with gr.Row(elem_classes=["secondary-actions"]):
                         btn_creator = gr.Button("创作者工作流", size="sm", variant="primary")
                         btn_gzh = gr.Button("公众号文章", size="sm", variant="secondary")
@@ -2536,7 +2687,13 @@ def create_chat_ui():
         
         # 快捷按钮事件
         def quick_creator(note_file=None, memory_mode="自动使用历史笔记"):
-            yield from _respond_stream(agent, _creator_workflow_prompt(), [], note_file, memory_mode)
+            yield from _respond_stream(
+                agent,
+                _creator_workflow_prompt(_get_agent_preferences(agent)),
+                [],
+                note_file,
+                memory_mode,
+            )
 
         def quick_gzh():
             yield from _respond_stream(agent, "帮我写一篇技术文章的公众号版本", [], None)
@@ -2593,6 +2750,19 @@ def create_chat_ui():
             save_preference_controls,
             inputs=[pref_reader, pref_style, pref_length, pref_weak],
             outputs=[pref_save_status, preference_summary, pref_detail],
+        )
+
+        save_creator_profile_btn.click(
+            save_creator_profile_controls,
+            inputs=[
+                creator_domain,
+                creator_audience,
+                creator_persona,
+                creator_forbidden,
+                creator_columns,
+                creator_benchmarks,
+            ],
+            outputs=[creator_profile_status, preference_summary, pref_detail],
         )
 
         # 审核按钮事件
