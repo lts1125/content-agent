@@ -404,6 +404,51 @@ class ChatProgressTest(unittest.TestCase):
 
         self.assertEqual("chat_20260601_150000", task_id)
 
+    def test_list_history_task_choices_only_includes_gongzhonghao_tasks(self):
+        class FakeMemory:
+            def list_generated_history(self, limit=20):
+                return [
+                    {
+                        "task_id": "chat_20260601_100000",
+                        "files": '["output/chat/20260601_100000/gongzhonghao.md"]',
+                    },
+                    {
+                        "task_id": "chat_20260601_110000",
+                        "files": '["output/chat/20260601_110000/xiaohongshu.md"]',
+                    },
+                ]
+
+        choices = chat_ui._list_history_task_choices(FakeMemory())
+
+        self.assertEqual(["chat_20260601_100000"], choices)
+
+    def test_read_history_gongzhonghao_article_by_task_id(self):
+        with TemporaryDirectory() as tmp_dir:
+            article_path = Path(tmp_dir) / "gongzhonghao.md"
+            article_path.write_text("# 历史文章\n\n正文", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_100000",
+                            "files": json.dumps([str(article_path)]),
+                        }
+                    ]
+
+            article, file_path = chat_ui._read_history_gongzhonghao_article(
+                FakeMemory(),
+                "chat_20260601_100000",
+            )
+
+        self.assertIn("# 历史文章", article)
+        self.assertEqual(str(article_path), file_path)
+
+    def test_history_continue_command_uses_task_id(self):
+        command = chat_ui._history_continue_command("chat_20260601_100000")
+
+        self.assertEqual("修改 task chat_20260601_100000，把开头写得更抓人", command)
+
 
 class ChatIntentTest(unittest.TestCase):
     def test_tail_instruction_wins_over_body_platform_mentions(self):

@@ -279,6 +279,46 @@ def _build_revision_notes_from_history(memory, message: str) -> tuple[Optional[s
     }
 
 
+def _list_history_task_choices(memory, limit: int = 20) -> list[str]:
+    """列出可操作的历史公众号 task id。"""
+    choices = []
+    for item in memory.list_generated_history(limit=limit):
+        task_id = item.get("task_id") or ""
+        files = _safe_json_load(item.get("files"), [])
+        if task_id and _select_gongzhonghao_file(files):
+            choices.append(task_id)
+    return choices
+
+
+def _find_history_task(memory, task_id: str) -> tuple[Optional[dict], Optional[str]]:
+    if not task_id:
+        return None, None
+    for item in memory.list_generated_history(limit=50):
+        if item.get("task_id") != task_id:
+            continue
+        gzh_file = _select_gongzhonghao_file(_safe_json_load(item.get("files"), []))
+        if gzh_file:
+            return item, gzh_file
+    return None, None
+
+
+def _read_history_gongzhonghao_article(memory, task_id: str) -> tuple[str, str]:
+    """读取历史公众号文章，返回 (正文, 文件路径)。"""
+    _, gzh_file = _find_history_task(memory, task_id)
+    if not gzh_file:
+        raise ValueError(f"没有找到 task {task_id} 对应的公众号文章文件")
+    path = Path(gzh_file)
+    if not path.exists():
+        raise ValueError(f"历史文章文件不存在: {gzh_file}")
+    return path.read_text(encoding="utf-8"), gzh_file
+
+
+def _history_continue_command(task_id: str, instruction: str = "把开头写得更抓人") -> str:
+    if not task_id:
+        return ""
+    return f"修改 task {task_id}，{instruction}"
+
+
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
     """保存各平台 Markdown，小红书同步生成 HTML 配图，并打包成 zip 供一键下载，返回可下载的文件列表。"""
     files = []
@@ -1952,6 +1992,40 @@ def create_chat_ui():
         """刷新历史任务面板"""
         items = agent.memory.list_generated_history(limit=8)
         return _format_generated_history(items, limit=8)
+
+    def refresh_generated_history_controls():
+        """刷新历史任务面板和可操作任务列表。"""
+        items = agent.memory.list_generated_history(limit=8)
+        choices = _list_history_task_choices(agent.memory, limit=20)
+        return (
+            _format_generated_history(items, limit=8),
+            gr.update(choices=choices, value=choices[0] if choices else None),
+        )
+
+    def view_history_article(task_id, chat_history):
+        chat_history = list(chat_history or [])
+        if not task_id:
+            chat_history.append({"role": "assistant", "content": "⚠️ 请先选择一个历史任务。"})
+            return _copy_chat_history(chat_history), "", *_download_button_updates([])
+        try:
+            article, file_path = _read_history_gongzhonghao_article(agent.memory, task_id)
+            chat_history.append({
+                "role": "assistant",
+                "content": (
+                    f"📖 **历史文章：`{task_id}`**\n\n"
+                    f"文件：`{file_path}`\n\n"
+                    f"---\n\n{article}"
+                ),
+            })
+            return _copy_chat_history(chat_history), file_path, *_download_button_updates([file_path])
+        except Exception as exc:
+            chat_history.append({"role": "assistant", "content": f"❌ 读取历史文章失败：{exc}"})
+            return _copy_chat_history(chat_history), "", *_download_button_updates([])
+
+    def fill_history_continue_command(task_id):
+        if not task_id:
+            return "请先在历史任务里选择一个 task"
+        return _history_continue_command(task_id)
     
     # 构建界面 - 使用系统字体避免加载 Google Fonts（国内网络阻塞问题）
     theme = gr.themes.Soft(
@@ -2384,6 +2458,16 @@ def create_chat_ui():
                         </ul>
                         """)
                         refresh_history_btn = gr.Button("刷新生成历史", size="sm", variant="secondary")
+                        history_choices = _list_history_task_choices(agent.memory, limit=20)
+                        history_task_select = gr.Dropdown(
+                            label="选择历史任务",
+                            choices=history_choices,
+                            value=history_choices[0] if history_choices else None,
+                            interactive=True,
+                        )
+                        with gr.Row():
+                            view_history_btn = gr.Button("查看全文", size="sm", variant="secondary")
+                            continue_history_btn = gr.Button("填入继续修改", size="sm", variant="secondary")
                         history_panel = gr.Markdown(
                             _format_generated_history(agent.memory.list_generated_history(limit=8), limit=8),
                             elem_classes=["history-scroll"],
@@ -2466,8 +2550,20 @@ def create_chat_ui():
         )
 
         refresh_history_btn.click(
-            refresh_generated_history,
-            outputs=[history_panel],
+            refresh_generated_history_controls,
+            outputs=[history_panel, history_task_select],
+        )
+
+        view_history_btn.click(
+            view_history_article,
+            inputs=[history_task_select, chatbot],
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy],
+        )
+
+        continue_history_btn.click(
+            fill_history_continue_command,
+            inputs=[history_task_select],
+            outputs=[msg_input],
         )
 
         save_pref_btn.click(
