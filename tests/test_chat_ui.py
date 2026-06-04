@@ -485,7 +485,7 @@ class ChatProgressTest(unittest.TestCase):
                     "platforms": '["gongzhonghao"]',
                     "files": json.dumps([str(gzh_path)]),
                     "created_at": "2026-06-01 15:00:00",
-                    "content": "📊 评分: 85/100",
+                    "content": "📊 评分: 85/100\n\n🧾 审核: 忽略 1 项建议后通过",
                     "publish_status": "draft_saved",
                     "publish_message": "已保存到草稿箱",
                     "memory_refs": json.dumps([
@@ -505,6 +505,8 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("history-card-command", message)
         self.assertIn("历史文章标题", message)
         self.assertIn("85/100", message)
+        self.assertIn("审核", message)
+        self.assertIn("忽略 1 项建议后通过", message)
         self.assertIn("修改 task chat_20260601_150000，把开头写得更抓人", message)
         self.assertIn("已保存草稿", message)
         self.assertIn("公众号", message)
@@ -517,6 +519,41 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual(88, chat_ui._extract_history_score({"overall_score": "88.0"}))
         self.assertEqual(71, chat_ui._extract_history_score({"content": "整体得分: 71/100 ❌ 未达标"}))
         self.assertIsNone(chat_ui._extract_history_score({"content": "没有评分"}))
+
+    def test_review_decision_label_and_extraction(self):
+        self.assertEqual("忽略 2 项建议后通过", chat_ui._review_decision_label("ignore", 2))
+        self.assertEqual("强行通过", chat_ui._review_decision_label("force_publish", 0))
+        self.assertEqual(
+            "强行通过",
+            chat_ui._extract_history_review_decision({"content": "🧾 审核: 强行通过\n\n正文"}),
+        )
+
+    def test_save_review_accepted_history_records_generated_turn(self):
+        class FakeMemory:
+            def __init__(self):
+                self.saved = []
+
+            def save_turn(self, *args, **kwargs):
+                self.saved.append((args, kwargs))
+
+        memory = FakeMemory()
+
+        task_id = chat_ui._save_review_accepted_history(
+            memory,
+            "session-1",
+            "✅ 已生成\n\n🧾 审核: 强行通过",
+            ["gongzhonghao"],
+            ["output/chat/20260601_150000/gongzhonghao.md"],
+            Path("output/chat/20260601_150000"),
+            memory_refs=[{"title": "todo"}],
+        )
+
+        self.assertEqual("chat_20260601_150000", task_id)
+        args, kwargs = memory.saved[0]
+        self.assertEqual(("session-1", "assistant", "✅ 已生成\n\n🧾 审核: 强行通过"), args)
+        self.assertEqual(["gongzhonghao"], kwargs["platforms"])
+        self.assertEqual("chat_20260601_150000", kwargs["task_id"])
+        self.assertEqual([{"title": "todo"}], kwargs["memory_refs"])
 
     def test_extract_markdown_title_reads_first_heading(self):
         with TemporaryDirectory() as tmp_dir:

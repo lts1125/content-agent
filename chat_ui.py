@@ -427,6 +427,46 @@ def _extract_history_score(item: dict) -> Optional[int]:
     return None
 
 
+def _review_decision_label(decision: str, ignored_count: int = 0) -> str:
+    if decision == "ignore":
+        if ignored_count:
+            return f"忽略 {ignored_count} 项建议后通过"
+        return "忽略建议后通过"
+    if decision == "force_publish":
+        return "强行通过"
+    if decision == "revise":
+        return "按建议修改"
+    return ""
+
+
+def _extract_history_review_decision(item: dict) -> str:
+    content = item.get("content") or ""
+    match = re.search(r"(?:🧾\s*)?审核[:：]\s*([^\n]+)", content)
+    return match.group(1).strip() if match else ""
+
+
+def _save_review_accepted_history(
+    memory,
+    session_id: str,
+    output_text: str,
+    platforms: list[str],
+    files: list[str],
+    output_dir: Path,
+    memory_refs: Optional[list[dict]] = None,
+) -> str:
+    task_id = f"chat_{output_dir.name}"
+    memory.save_turn(
+        session_id,
+        "assistant",
+        output_text,
+        platforms=platforms,
+        files=files,
+        task_id=task_id,
+        memory_refs=memory_refs or [],
+    )
+    return task_id
+
+
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
     """保存各平台 Markdown，小红书同步生成 HTML 配图，并打包成 zip 供一键下载，返回可下载的文件列表。"""
     files = []
@@ -997,6 +1037,9 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
                 f'<span>引用</span><code>{len(memory_refs)} 条：{"；".join(ref_names)}{suffix}</code>'
                 '</div>'
             )
+        review_decision = _extract_history_review_decision(item)
+        if review_decision:
+            lines.append(f'<div class="history-card-row"><span>审核</span><code>{review_decision}</code></div>')
         if publish_status:
             status_label = {
                 "draft_saved": "已保存草稿",
@@ -1743,6 +1786,7 @@ class ChatAgent:
                 panel = review_panel
                 panel.raw_content = content
                 panel.platforms = platforms
+                setattr(panel, "memory_refs", memory_refs)
                 # 保存到数据库
                 task_id = getattr(self, "_current_task_id", self.session_id)
                 setattr(panel, "task_id", task_id)
@@ -3116,6 +3160,7 @@ def create_chat_ui():
             if action == "publish":
                 content = panel.raw_content
                 platforms = panel.platforms
+                memory_refs = getattr(panel, "memory_refs", [])
                 output_dir = Path("output/chat") / datetime.now().strftime("%Y%m%d_%H%M%S")
                 output_dir.mkdir(parents=True, exist_ok=True)
                 files = _save_generated_markdown_files(content, platforms, output_dir)
@@ -3124,6 +3169,9 @@ def create_chat_ui():
                     output_text += f"📊 评分: {panel.effective_score}/100 (忽略后)\n\n"
                 else:
                     output_text += f"📊 评分: {panel.overall}/100\n\n"
+                review_label = _review_decision_label(decision, panel.ignored_count)
+                if review_label:
+                    output_text += f"🧾 审核: {review_label}\n\n"
                 gzh_path = ""
                 for platform in platforms:
                     text = getattr(content, platform, "")
@@ -3132,6 +3180,15 @@ def create_chat_ui():
                     for f in files:
                         if platform in f and f.endswith(".md") and platform == "gongzhonghao":
                             gzh_path = f
+                _save_review_accepted_history(
+                    agent.memory,
+                    agent.session_id,
+                    output_text,
+                    platforms,
+                    files,
+                    output_dir,
+                    memory_refs=memory_refs,
+                )
                 chat_history.append({"role": "assistant", "content": output_text})
                 xiaohongshu_html = ""
                 for f in files:
