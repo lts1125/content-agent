@@ -15,7 +15,7 @@ from agents.schemas import TaskState, WriterOutput, EditVerdict, ResearchResult
 
 DB_DIR = Path(__file__).parent.parent / "data"
 DB_PATH = DB_DIR / "content_agent.db"
-_SCHEMA_VERSION = 7
+_SCHEMA_VERSION = 8
 
 
 def _ensure_db():
@@ -294,6 +294,7 @@ def init_conversation_turns_table():
             content     TEXT    NOT NULL,
             platforms   TEXT,
             files       TEXT,
+            memory_refs TEXT,
             created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
             task_id     TEXT
         );
@@ -301,6 +302,7 @@ def init_conversation_turns_table():
         CREATE INDEX IF NOT EXISTS idx_conv_created ON conversation_turns(created_at);
         """
     )
+    _ensure_column(conn, "conversation_turns", "memory_refs", "TEXT")
     conn.commit()
     conn.close()
 
@@ -681,13 +683,14 @@ def save_conversation_turn(
     platforms: Optional[List[str]] = None,
     files: Optional[List[str]] = None,
     task_id: Optional[str] = None,
+    memory_refs: Optional[List[dict]] = None,
 ) -> int:
     """保存一轮会话，返回自增 ID"""
     conn = _get_conn()
     cur = conn.execute(
         """
-        INSERT INTO conversation_turns (session_id, role, content, platforms, files, task_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+        INSERT INTO conversation_turns (session_id, role, content, platforms, files, memory_refs, task_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
         """,
         (
             session_id,
@@ -695,6 +698,7 @@ def save_conversation_turn(
             content,
             json.dumps(platforms, ensure_ascii=False) if platforms else None,
             json.dumps(files, ensure_ascii=False) if files else None,
+            json.dumps(memory_refs, ensure_ascii=False) if memory_refs else None,
             task_id,
         ),
     )

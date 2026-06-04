@@ -79,6 +79,13 @@ def test_generated_history():
         platforms=["gongzhonghao"],
         files=["/tmp/gongzhonghao.md"],
         task_id="chat_20260601_120000",
+        memory_refs=[
+            {
+                "title": "MCP 笔记",
+                "source": "notes/mcp.md",
+                "heading": "背景",
+            }
+        ],
     )
 
     items = store.list_generated_turns(limit=5)
@@ -86,6 +93,7 @@ def test_generated_history():
     assert len(matched) == 1, f"期望 1 条生成历史，实际 {len(matched)} 条"
     assert matched[0]["task_id"] == "chat_20260601_120000"
     assert "gongzhonghao.md" in matched[0]["files"]
+    assert "MCP 笔记" in matched[0]["memory_refs"]
     print("✅ 生成历史查询正常")
 
     deleted = store.clear_session(sid)

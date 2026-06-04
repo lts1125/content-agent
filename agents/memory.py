@@ -99,6 +99,7 @@ class MemoryManager:
         platforms: Optional[List[str]] = None,
         files: Optional[List[str]] = None,
         task_id: Optional[str] = None,
+        memory_refs: Optional[List[dict]] = None,
     ) -> int:
         """保存一轮会话，返回自增 ID"""
         return store.save_conversation_turn(
@@ -108,6 +109,7 @@ class MemoryManager:
             platforms=platforms,
             files=files,
             task_id=task_id,
+            memory_refs=memory_refs,
         )
 
     def get_recent_turns(

@@ -414,6 +414,12 @@ class ChatProgressTest(unittest.TestCase):
                 "created_at": "2026-06-01 15:00:00",
                 "publish_status": "draft_saved",
                 "publish_message": "已保存到草稿箱",
+                "memory_refs": json.dumps([
+                    {
+                        "title": "Content Agent 笔记",
+                        "heading": "RAG 引用",
+                    }
+                ], ensure_ascii=False),
             }
         ]
 
@@ -428,6 +434,8 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("公众号", message)
         self.assertIn("chat_20260601_150000", message)
         self.assertIn("gongzhonghao.md", message)
+        self.assertIn("引用", message)
+        self.assertIn("Content Agent 笔记 / RAG 引用", message)
 
     def test_format_generated_history_handles_empty_items(self):
         message = chat_ui._format_generated_history([])

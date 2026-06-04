@@ -810,6 +810,7 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         publish_status = item.get("publish_status") or ""
         publish_message = item.get("publish_message") or ""
         publish_details = item.get("publish_details") or ""
+        memory_refs = _safe_json_load(item.get("memory_refs"), [])
         main_file = next((f for f in files if "gongzhonghao" in f and f.endswith(".md")), None)
         if main_file is None and files:
             main_file = files[0]
@@ -819,6 +820,18 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         lines.append(f'<div class="history-card-row"><span>task</span><code>{task_id}</code></div>')
         if main_file:
             lines.append(f'<div class="history-card-row"><span>文件</span><code>{main_file}</code></div>')
+        if memory_refs:
+            ref_names = []
+            for ref in memory_refs[:3]:
+                title = ref.get("title") or "未命名笔记"
+                heading = ref.get("heading") or ""
+                ref_names.append(f"{title} / {heading}" if heading else title)
+            suffix = " 等" if len(memory_refs) > 3 else ""
+            lines.append(
+                '<div class="history-card-row">'
+                f'<span>引用</span><code>{len(memory_refs)} 条：{"；".join(ref_names)}{suffix}</code>'
+                '</div>'
+            )
         if publish_status:
             status_label = {
                 "draft_saved": "已保存草稿",
@@ -1628,6 +1641,7 @@ class ChatAgent:
                 self.session_id, "assistant", output_text,
                 platforms=platforms, files=files,
                 task_id=f"chat_{output_dir.name}",
+                memory_refs=memory_refs,
             )
 
             yield {
