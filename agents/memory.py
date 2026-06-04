@@ -208,6 +208,10 @@ class MemoryManager:
         """获取用户全部偏好"""
         return store.get_user_preferences(self.user_id)
 
+    def delete_preference(self, key: str) -> bool:
+        """删除单个用户偏好"""
+        return store.delete_user_preference(self.user_id, key)
+
     def infer_preferences_from_history(self) -> dict:
         """
         从历史生成中推断偏好（简单版）。

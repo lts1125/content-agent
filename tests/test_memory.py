@@ -199,6 +199,15 @@ def test_user_preferences():
     assert missing == "default_val"
     print("✅ 默认值正常")
 
+    # 删除
+    deleted = store.delete_user_preference(uid, "preferred_tone")
+    assert deleted is True
+    missing_after_delete = store.get_user_preference(uid, "preferred_tone", default=None)
+    assert missing_after_delete is None
+    deleted_again = store.delete_user_preference(uid, "preferred_tone")
+    assert deleted_again is False
+    print("✅ 删除正常")
+
     # 清理
     conn = store._get_conn()
     conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (uid,))

@@ -926,6 +926,19 @@ def get_user_preferences(user_id: str = "default") -> dict:
     return prefs
 
 
+def delete_user_preference(user_id: str, pref_key: str) -> bool:
+    """删除单个用户偏好，返回是否实际删除。"""
+    conn = _get_conn()
+    cur = conn.execute(
+        "DELETE FROM user_preferences WHERE user_id = ? AND pref_key = ?",
+        (user_id, pref_key),
+    )
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
 # ---------------------------------------------------------------------------
 # 审核面板
 # ---------------------------------------------------------------------------

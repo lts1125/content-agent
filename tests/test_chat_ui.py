@@ -46,6 +46,15 @@ class ChatUiConfigTest(unittest.TestCase):
         self.assertIn("目标受众", labels)
         self.assertIn("人设语气", labels)
 
+    def test_preference_management_controls_are_visible_in_ui_config(self):
+        demo = chat_ui.create_chat_ui()
+        labels = json.dumps(demo.get_config_file(), ensure_ascii=False, default=str)
+
+        self.assertIn("偏好管理", labels)
+        self.assertIn("刷新偏好", labels)
+        self.assertIn("清空弱项学习", labels)
+        self.assertIn("清空公众号默认风格", labels)
+
 
 class ChatProgressTest(unittest.TestCase):
     def test_creator_workflow_prompt_requests_multi_platform_delivery(self):
@@ -344,6 +353,30 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual(["originality", "readability"], memory.values["weak_dimensions"])
         self.assertEqual("inferred", memory.source)
         self.assertEqual(0.7, memory.confidence)
+
+    def test_clear_managed_preferences_only_removes_selected_keys(self):
+        class FakeMemory:
+            def __init__(self):
+                self.values = {
+                    "weak_dimensions": ["readability"],
+                    "gzh_default_style": "通俗科普",
+                    "gzh_target_reader": "普通技术人",
+                }
+
+            def delete_preference(self, key):
+                return self.values.pop(key, None) is not None
+
+            def get_preferences(self):
+                return dict(self.values)
+
+        memory = FakeMemory()
+
+        message, prefs = chat_ui._clear_managed_preferences(memory, ["weak_dimensions"])
+
+        self.assertIn("已清理", message)
+        self.assertNotIn("weak_dimensions", prefs)
+        self.assertEqual("通俗科普", prefs["gzh_default_style"])
+        self.assertEqual("普通技术人", prefs["gzh_target_reader"])
 
     def test_preference_control_defaults_read_saved_preferences(self):
         defaults = chat_ui._preference_control_defaults(

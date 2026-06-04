@@ -698,6 +698,17 @@ def _learn_review_feedback_preferences(memory, weak_dimensions: list[str]) -> bo
     return True
 
 
+def _clear_managed_preferences(memory, keys: list[str]) -> tuple[str, dict]:
+    deleted = []
+    for key in keys or []:
+        if memory.delete_preference(key):
+            deleted.append(key)
+    prefs = memory.get_preferences()
+    if deleted:
+        return f"✅ 已清理偏好：{', '.join(deleted)}", prefs
+    return "ℹ️ 没有可清理的偏好", prefs
+
+
 def _apply_review_feedback_learning(memory, limit: int = 5, min_count: int = 3) -> bool:
     try:
         from agents.store import infer_weak_dimensions_from_review_feedback
@@ -2236,6 +2247,24 @@ def create_chat_ui():
             _format_user_preferences(prefs),
         )
 
+    def refresh_preference_controls():
+        prefs = _get_agent_preferences(agent)
+        return (
+            "✅ 已刷新偏好",
+            _format_preference_summary_html(prefs),
+            _format_user_preferences(prefs),
+            *_preference_control_defaults(prefs),
+        )
+
+    def clear_preference_keys(keys: list[str]):
+        status, prefs = _clear_managed_preferences(agent.memory, keys)
+        return (
+            status,
+            _format_preference_summary_html(prefs),
+            _format_user_preferences(prefs),
+            *_preference_control_defaults(prefs),
+        )
+
     def save_creator_profile_controls(domain, audience, persona, forbidden, columns, benchmarks):
         """保存创作者账号定位。"""
         selections = {
@@ -2769,6 +2798,15 @@ def create_chat_ui():
                             _format_user_preferences(_get_agent_preferences(agent)),
                             visible=False,
                         )
+                    with gr.Accordion("偏好管理", open=False):
+                        gr.Markdown("查看并清理会影响后续生成的偏好。这里不删除历史任务和笔记记忆。")
+                        with gr.Row():
+                            refresh_pref_btn = gr.Button("刷新偏好", size="sm", variant="secondary")
+                            clear_weak_pref_btn = gr.Button("清空弱项学习", size="sm", variant="secondary")
+                        with gr.Row():
+                            clear_style_pref_btn = gr.Button("清空公众号默认风格", size="sm", variant="secondary")
+                            clear_reader_pref_btn = gr.Button("清空公众号默认读者", size="sm", variant="secondary")
+                        clear_custom_pref_btn = gr.Button("清空自定义要求", size="sm", variant="secondary")
                     with gr.Accordion("创作者账号定位", open=False):
                         creator_domain = gr.Textbox(
                             label="账号领域",
@@ -3009,6 +3047,31 @@ def create_chat_ui():
             save_preference_controls,
             inputs=[pref_reader, pref_style, pref_length, pref_weak],
             outputs=[pref_save_status, preference_summary, pref_detail],
+        )
+
+        refresh_pref_btn.click(
+            refresh_preference_controls,
+            outputs=[pref_save_status, preference_summary, pref_detail, pref_reader, pref_style, pref_length, pref_weak],
+        )
+
+        clear_weak_pref_btn.click(
+            lambda: clear_preference_keys(["weak_dimensions"]),
+            outputs=[pref_save_status, preference_summary, pref_detail, pref_reader, pref_style, pref_length, pref_weak],
+        )
+
+        clear_style_pref_btn.click(
+            lambda: clear_preference_keys(["gzh_default_style"]),
+            outputs=[pref_save_status, preference_summary, pref_detail, pref_reader, pref_style, pref_length, pref_weak],
+        )
+
+        clear_reader_pref_btn.click(
+            lambda: clear_preference_keys(["gzh_target_reader"]),
+            outputs=[pref_save_status, preference_summary, pref_detail, pref_reader, pref_style, pref_length, pref_weak],
+        )
+
+        clear_custom_pref_btn.click(
+            lambda: clear_preference_keys(["custom_prompt"]),
+            outputs=[pref_save_status, preference_summary, pref_detail, pref_reader, pref_style, pref_length, pref_weak],
         )
 
         save_creator_profile_btn.click(
