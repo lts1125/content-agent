@@ -1102,6 +1102,82 @@ def get_review_panel_detail(panel_id: int) -> Optional[dict]:
     }
 
 
+def list_review_feedback(limit: int = 20) -> List[dict]:
+    """列出最近审核反馈，包含审核项，供保守学习使用。"""
+    panels = list_review_panels(limit=limit)
+    feedback = []
+    for panel in panels:
+        detail = get_review_panel_detail(panel["id"])
+        if not detail:
+            continue
+        feedback.append(detail)
+    return feedback
+
+
+def _count_sorted_dimensions(counts: dict) -> List[str]:
+    return [
+        dimension
+        for dimension, _ in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+    ]
+
+
+def summarize_review_feedback(limit: int = 20) -> dict:
+    """聚合最近审核反馈：采纳修改、忽略项和强行通过次数。"""
+    accepted_counts = {}
+    ignored_counts = {}
+    force_publish_count = 0
+
+    for panel in list_review_feedback(limit=limit):
+        decision = panel.get("user_decision") or ""
+        items = panel.get("items") or []
+
+        if decision == "revise":
+            for item in items:
+                if item.get("passed") or item.get("ignored"):
+                    continue
+                dimension = item.get("dimension") or ""
+                if dimension:
+                    accepted_counts[dimension] = accepted_counts.get(dimension, 0) + 1
+            continue
+
+        if decision == "ignore":
+            for item in items:
+                if not item.get("ignored"):
+                    continue
+                dimension = item.get("dimension") or ""
+                if dimension:
+                    ignored_counts[dimension] = ignored_counts.get(dimension, 0) + 1
+            continue
+
+        if decision == "force_publish":
+            force_publish_count += 1
+
+    return {
+        "accepted_dimensions": _count_sorted_dimensions(accepted_counts),
+        "ignored_dimensions": _count_sorted_dimensions(ignored_counts),
+        "force_publish_count": force_publish_count,
+        "accepted_counts": accepted_counts,
+        "ignored_counts": ignored_counts,
+    }
+
+
+def infer_weak_dimensions_from_review_feedback(limit: int = 5, min_count: int = 3) -> List[str]:
+    """从近期多次采纳修改中保守推断弱项，不使用忽略或强行通过记录。"""
+    summary = summarize_review_feedback(limit=limit)
+    accepted_counts = summary.get("accepted_counts") or {}
+    return [
+        dimension
+        for dimension, count in sorted(
+            accepted_counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )
+        if count >= min_count
+    ]
+
+
 def get_recent_eval_results(days: int = 30, limit: int = 500) -> List[dict]:
     """获取最近 N 天的评估结果，按时间倒序"""
     conn = _get_conn()

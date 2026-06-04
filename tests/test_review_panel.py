@@ -78,6 +78,13 @@ save_review_panel = store_mod.save_review_panel
 load_review_panel = store_mod.load_review_panel
 list_review_panels = store_mod.list_review_panels
 get_review_panel_detail = store_mod.get_review_panel_detail
+list_review_feedback = getattr(store_mod, "list_review_feedback", None)
+summarize_review_feedback = getattr(store_mod, "summarize_review_feedback", None)
+infer_weak_dimensions_from_review_feedback = getattr(
+    store_mod,
+    "infer_weak_dimensions_from_review_feedback",
+    None,
+)
 
 # 尝试加载 chat_ui（已被 gradio mock 保护）
 _chat_ui_loaded = False
@@ -437,6 +444,83 @@ class ReviewDatabaseTest(unittest.TestCase):
     def test_get_review_panel_detail_returns_none_for_invalid_id(self):
         detail = get_review_panel_detail(99999)
         self.assertIsNone(detail)
+
+    def test_summarize_review_feedback_groups_decisions(self):
+        revise_panel = ReviewPanel(
+            overall=65,
+            threshold=75,
+            passed=False,
+            verdict_text="需修改",
+            user_decision="revise",
+            items=[
+                ReviewItem("公众号", 65, 75, False, "开头太平淡"),
+                ReviewItem("结构", 82, 75, True, ""),
+            ],
+            platforms=["gongzhonghao"],
+        )
+        ignore_panel = ReviewPanel(
+            overall=70,
+            threshold=75,
+            passed=False,
+            verdict_text="需修改",
+            user_decision="ignore",
+            items=[
+                ReviewItem("代码示例", 60, 75, False, "补代码", ignored=True),
+                ReviewItem("可读性", 80, 75, True, ""),
+            ],
+            platforms=["gongzhonghao"],
+        )
+        force_panel = ReviewPanel(
+            overall=68,
+            threshold=75,
+            passed=False,
+            verdict_text="需人工复审",
+            user_decision="force_publish",
+            items=[
+                ReviewItem("实用性", 68, 75, False, "补步骤"),
+            ],
+            platforms=["gongzhonghao"],
+        )
+        save_review_panel(revise_panel, "feedback-revise")
+        save_review_panel(ignore_panel, "feedback-ignore")
+        save_review_panel(force_panel, "feedback-force")
+
+        feedback = summarize_review_feedback(limit=20)
+
+        self.assertIn("公众号", feedback["accepted_dimensions"])
+        self.assertIn("代码示例", feedback["ignored_dimensions"])
+        self.assertEqual(1, feedback["force_publish_count"])
+        self.assertNotIn("实用性", feedback["accepted_dimensions"])
+
+    def test_infer_weak_dimensions_requires_repeated_revise(self):
+        for idx in range(3):
+            panel = ReviewPanel(
+                overall=64,
+                threshold=75,
+                passed=False,
+                verdict_text="需修改",
+                user_decision="revise",
+                items=[
+                    ReviewItem("公众号", 64, 75, False, "写得更通俗"),
+                    ReviewItem("代码示例", 62, 75, False, "补代码", ignored=True),
+                ],
+                platforms=["gongzhonghao"],
+            )
+            save_review_panel(panel, f"weak-dim-{idx}")
+        force_panel = ReviewPanel(
+            overall=50,
+            threshold=75,
+            passed=False,
+            verdict_text="需人工复审",
+            user_decision="force_publish",
+            items=[ReviewItem("实用性", 50, 75, False, "补步骤")],
+            platforms=["gongzhonghao"],
+        )
+        save_review_panel(force_panel, "weak-dim-force")
+
+        weak_dimensions = infer_weak_dimensions_from_review_feedback(limit=5, min_count=3)
+
+        self.assertEqual(["公众号"], weak_dimensions)
 
 
 @unittest.skipUnless(_chat_ui_loaded, "chat_ui 依赖未就绪，跳过集成测试")

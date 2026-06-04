@@ -647,6 +647,67 @@ def _format_preference_generation_status(applied: list[str], platforms: list[str
     return "\n\n🧭 **本次应用的公众号偏好：** 未设置公众号偏好，本次仅按当前输入要求生成。"
 
 
+REVIEW_DIMENSION_TO_WEAK_KEY = {
+    "公众号": "readability",
+    "可读性": "readability",
+    "阅读体验": "readability",
+    "原创性": "originality",
+    "实用性": "practicality",
+    "实践性": "practicality",
+}
+
+
+def _format_review_feedback_summary(summary: dict) -> str:
+    accepted = _as_list((summary or {}).get("accepted_dimensions"))
+    ignored = _as_list((summary or {}).get("ignored_dimensions"))
+    force_count = int((summary or {}).get("force_publish_count") or 0)
+    if not accepted and not ignored and not force_count:
+        return "审核反馈：暂无"
+
+    lines = ["审核反馈："]
+    if accepted:
+        lines.append(f"最近常采纳修改：{'、'.join(str(item) for item in accepted[:3])}")
+    if ignored:
+        lines.append(f"最近常忽略：{'、'.join(str(item) for item in ignored[:3])}")
+    if force_count:
+        lines.append(f"强行通过：{force_count} 次")
+    return "<br>".join(lines)
+
+
+def _learn_review_feedback_preferences(memory, weak_dimensions: list[str]) -> bool:
+    mapped = []
+    for dimension in weak_dimensions or []:
+        key = REVIEW_DIMENSION_TO_WEAK_KEY.get(str(dimension), str(dimension))
+        if key and key not in mapped:
+            mapped.append(key)
+
+    if not mapped:
+        return False
+
+    prefs = memory.get_preferences()
+    current = _as_list(prefs.get("weak_dimensions"))
+    merged = list(current)
+    for key in mapped:
+        if key not in merged:
+            merged.append(key)
+
+    if merged == current:
+        return False
+
+    memory.set_preference("weak_dimensions", merged, source="inferred", confidence=0.7)
+    return True
+
+
+def _apply_review_feedback_learning(memory, limit: int = 5, min_count: int = 3) -> bool:
+    try:
+        from agents.store import infer_weak_dimensions_from_review_feedback
+        weak_dimensions = infer_weak_dimensions_from_review_feedback(limit=limit, min_count=min_count)
+        return _learn_review_feedback_preferences(memory, weak_dimensions)
+    except Exception as exc:
+        logger.warning(f"审核反馈学习失败: {exc}")
+        return False
+
+
 def _format_user_preferences(prefs: dict) -> str:
     """把偏好从原始 key-value 转成用户可读的 Markdown。"""
     if not prefs:
@@ -731,6 +792,11 @@ def _format_preference_summary_html(prefs: dict) -> str:
     weak_text = "、".join(str(item) for item in weak_dimensions) if weak_dimensions else "未设置"
     custom = prefs.get("custom_prompt") or ""
     custom_line = f"<br>自定义：{custom}" if custom else ""
+    try:
+        from agents.store import summarize_review_feedback
+        feedback_line = "<br>" + _format_review_feedback_summary(summarize_review_feedback(limit=20))
+    except Exception:
+        feedback_line = ""
     return f"""
     <div class="preference-summary">
       <strong>当前默认</strong><br>
@@ -742,7 +808,7 @@ def _format_preference_summary_html(prefs: dict) -> str:
       人设语气：{persona}<br>
       长度：{length}<br>
       弱项强化：{weak_text}<br>
-      历史记忆：开启，生成时会自动检索相关笔记{custom_line}
+      历史记忆：开启，生成时会自动检索相关笔记{custom_line}{feedback_line}
     </div>
     """
 
@@ -1668,6 +1734,7 @@ class ChatAgent:
                 panel.platforms = platforms
                 # 保存到数据库
                 task_id = getattr(self, "_current_task_id", self.session_id)
+                setattr(panel, "task_id", task_id)
                 ReviewManager.save_panel(panel, task_id)
 
                 review_md = (
@@ -2970,10 +3037,17 @@ def create_chat_ui():
                     "",
                     *_download_button_updates([]),
                     gr.update(value="", visible=False),
+                    _format_preference_summary_html(_get_agent_preferences(agent)),
                 )
 
             panel = panel_data
             decision_result = ReviewManager.apply_user_decision(panel, decision)
+            task_id = getattr(panel, "task_id", "") or agent.session_id
+            try:
+                ReviewManager.save_panel(panel, task_id)
+                _apply_review_feedback_learning(agent.memory)
+            except Exception as exc:
+                logger.warning(f"审核反馈保存失败: {exc}")
             action = decision_result["action"]
 
             if action == "publish":
@@ -3012,6 +3086,7 @@ def create_chat_ui():
                     gzh_path,
                     *_download_button_updates(files),
                     gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html)),
+                    _format_preference_summary_html(_get_agent_preferences(agent)),
                 )
 
             if action == "revise":
@@ -3023,6 +3098,7 @@ def create_chat_ui():
                     "",
                     *_download_button_updates([]),
                     gr.update(value="", visible=False),
+                    _format_preference_summary_html(_get_agent_preferences(agent)),
                 )
 
             if action == "retry":
@@ -3034,6 +3110,7 @@ def create_chat_ui():
                     "",
                     *_download_button_updates([]),
                     gr.update(value="", visible=False),
+                    _format_preference_summary_html(_get_agent_preferences(agent)),
                 )
 
             chat_history.append({"role": "assistant", "content": "未知的审核决策。"})
@@ -3044,6 +3121,7 @@ def create_chat_ui():
                 "",
                 *_download_button_updates([]),
                 gr.update(value="", visible=False),
+                _format_preference_summary_html(_get_agent_preferences(agent)),
             )
 
         def on_revise_generate(panel_data, chat_history):
@@ -3064,6 +3142,7 @@ def create_chat_ui():
 
             panel = panel_data
             from agents.review import MAX_REVISION_ATTEMPTS
+            from agents.review import ReviewManager
 
             # 检查是否还能采纳修改
             if not panel.can_revise():
@@ -3081,6 +3160,13 @@ def create_chat_ui():
                 return
 
             panel.revision_count += 1
+            ReviewManager.apply_user_decision(panel, "revise")
+            task_id = getattr(panel, "task_id", "") or agent.session_id
+            try:
+                ReviewManager.save_panel(panel, task_id)
+                _apply_review_feedback_learning(agent.memory)
+            except Exception as exc:
+                logger.warning(f"审核反馈保存失败: {exc}")
             revised_message = _build_review_revision_message(panel, chat_history, MAX_REVISION_ATTEMPTS)
 
             # 先隐藏审核面板
@@ -3106,12 +3192,12 @@ def create_chat_ui():
         btn_ignore.click(
             lambda panel, hist: on_review_decision("ignore", panel, hist),
             inputs=[review_state, chatbot],
-            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, preference_summary]
         )
         btn_force.click(
             lambda panel, hist: on_review_decision("force_publish", panel, hist),
             inputs=[review_state, chatbot],
-            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview]
+            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, preference_summary]
         )
 
         # 使用说明

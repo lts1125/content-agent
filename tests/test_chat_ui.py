@@ -309,6 +309,42 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("长度：medium", html)
         self.assertIn("弱项强化：readability、originality", html)
 
+    def test_format_review_feedback_summary_lists_conservative_signals(self):
+        html = chat_ui._format_review_feedback_summary(
+            {
+                "accepted_dimensions": ["公众号", "可读性"],
+                "ignored_dimensions": ["代码示例"],
+                "force_publish_count": 1,
+            }
+        )
+
+        self.assertIn("审核反馈", html)
+        self.assertIn("最近常采纳修改：公众号、可读性", html)
+        self.assertIn("最近常忽略：代码示例", html)
+        self.assertIn("强行通过：1 次", html)
+
+    def test_learn_review_feedback_preferences_merges_weak_dimensions(self):
+        class FakeMemory:
+            def __init__(self):
+                self.values = {"weak_dimensions": ["originality"]}
+
+            def get_preferences(self):
+                return dict(self.values)
+
+            def set_preference(self, key, value, source="inferred", confidence=0.7):
+                self.values[key] = value
+                self.source = source
+                self.confidence = confidence
+
+        memory = FakeMemory()
+
+        changed = chat_ui._learn_review_feedback_preferences(memory, ["公众号", "可读性"])
+
+        self.assertTrue(changed)
+        self.assertEqual(["originality", "readability"], memory.values["weak_dimensions"])
+        self.assertEqual("inferred", memory.source)
+        self.assertEqual(0.7, memory.confidence)
+
     def test_preference_control_defaults_read_saved_preferences(self):
         defaults = chat_ui._preference_control_defaults(
             {
