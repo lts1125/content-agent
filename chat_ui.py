@@ -390,6 +390,43 @@ def _note_matches_excluded_ref(note, excluded_refs: list[str]) -> bool:
     return any(term and term in haystack for term in excluded_refs)
 
 
+def _extract_markdown_title(file_path: Optional[str]) -> str:
+    if not file_path:
+        return ""
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        return ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                title = stripped.lstrip("#").strip()
+                if title:
+                    return title
+            if stripped:
+                return stripped[:40]
+    except Exception:
+        return ""
+    return ""
+
+
+def _extract_history_score(item: dict) -> Optional[int]:
+    for key in ("score", "overall", "overall_score"):
+        value = item.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            continue
+
+    content = item.get("content") or ""
+    match = re.search(r"(?:评分|整体得分)\s*[:：]\s*(\d{1,3})\s*/\s*100", content)
+    if match:
+        return int(match.group(1))
+    return None
+
+
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
     """保存各平台 Markdown，小红书同步生成 HTML 配图，并打包成 zip 供一键下载，返回可下载的文件列表。"""
     files = []
@@ -860,9 +897,14 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         main_file = next((f for f in files if "gongzhonghao" in f and f.endswith(".md")), None)
         if main_file is None and files:
             main_file = files[0]
+        article_title = _extract_markdown_title(main_file)
+        score = _extract_history_score(item)
         lines.append('<div class="history-task-card">')
-        lines.append(f'<div class="history-card-title">{labels}</div>')
+        lines.append(f'<div class="history-card-title">{article_title or labels}</div>')
         lines.append(f'<div class="history-card-meta">{item["created_at"]} · 会话 <code>{sid}...</code></div>')
+        lines.append(f'<div class="history-card-row"><span>平台</span><code>{labels}</code></div>')
+        if score is not None:
+            lines.append(f'<div class="history-card-row"><span>评分</span><code>{score}/100</code></div>')
         lines.append(f'<div class="history-card-row"><span>task</span><code>{task_id}</code></div>')
         if main_file:
             lines.append(f'<div class="history-card-row"><span>文件</span><code>{main_file}</code></div>')

@@ -406,30 +406,36 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual([], refs)
 
     def test_format_generated_history_lists_generated_files(self):
-        items = [
-            {
-                "session_id": "session_abcdef",
-                "task_id": "chat_20260601_150000",
-                "platforms": '["gongzhonghao"]',
-                "files": '["output/chat/20260601_150000/gongzhonghao.md"]',
-                "created_at": "2026-06-01 15:00:00",
-                "publish_status": "draft_saved",
-                "publish_message": "已保存到草稿箱",
-                "memory_refs": json.dumps([
-                    {
-                        "title": "Content Agent 笔记",
-                        "heading": "RAG 引用",
-                    }
-                ], ensure_ascii=False),
-            }
-        ]
+        with TemporaryDirectory() as tmp_dir:
+            gzh_path = Path(tmp_dir) / "gongzhonghao.md"
+            gzh_path.write_text("# 历史文章标题\n\n正文", encoding="utf-8")
+            items = [
+                {
+                    "session_id": "session_abcdef",
+                    "task_id": "chat_20260601_150000",
+                    "platforms": '["gongzhonghao"]',
+                    "files": json.dumps([str(gzh_path)]),
+                    "created_at": "2026-06-01 15:00:00",
+                    "content": "📊 评分: 85/100",
+                    "publish_status": "draft_saved",
+                    "publish_message": "已保存到草稿箱",
+                    "memory_refs": json.dumps([
+                        {
+                            "title": "Content Agent 笔记",
+                            "heading": "RAG 引用",
+                        }
+                    ], ensure_ascii=False),
+                }
+            ]
 
-        message = chat_ui._format_generated_history(items)
+            message = chat_ui._format_generated_history(items)
 
         self.assertIn("近期生成历史", message)
         self.assertIn("修改 task chat_YYYYMMDD_HHMMSS", message)
         self.assertIn("history-task-card", message)
         self.assertIn("history-card-command", message)
+        self.assertIn("历史文章标题", message)
+        self.assertIn("85/100", message)
         self.assertIn("修改 task chat_20260601_150000，把开头写得更抓人", message)
         self.assertIn("已保存草稿", message)
         self.assertIn("公众号", message)
@@ -437,6 +443,18 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("gongzhonghao.md", message)
         self.assertIn("引用", message)
         self.assertIn("Content Agent 笔记 / RAG 引用", message)
+
+    def test_extract_history_score_accepts_common_shapes(self):
+        self.assertEqual(88, chat_ui._extract_history_score({"overall_score": "88.0"}))
+        self.assertEqual(71, chat_ui._extract_history_score({"content": "整体得分: 71/100 ❌ 未达标"}))
+        self.assertIsNone(chat_ui._extract_history_score({"content": "没有评分"}))
+
+    def test_extract_markdown_title_reads_first_heading(self):
+        with TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / "article.md"
+            path.write_text("\n# AI 工具为什么不好用\n\n正文", encoding="utf-8")
+
+            self.assertEqual("AI 工具为什么不好用", chat_ui._extract_markdown_title(str(path)))
 
     def test_format_generated_history_handles_empty_items(self):
         message = chat_ui._format_generated_history([])
