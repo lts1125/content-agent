@@ -344,6 +344,52 @@ def _load_history_publish_target(memory, task_id: str) -> tuple[str, str]:
     return status, gzh_file
 
 
+def _memory_ref_label(ref: dict) -> str:
+    title = ref.get("title") or "未命名笔记"
+    source = ref.get("source") or ""
+    heading = ref.get("heading") or ""
+    parts = [part for part in [title, heading, source] if part]
+    return " / ".join(parts)
+
+
+def _list_history_memory_ref_choices(memory, task_id: str) -> list[str]:
+    item, _ = _find_history_task(memory, task_id)
+    refs = _safe_json_load((item or {}).get("memory_refs"), [])
+    return [_memory_ref_label(ref) for ref in refs]
+
+
+def _exclude_ref_command(task_id: str, ref_label: str) -> str:
+    if not task_id:
+        return "请先在历史任务里选择一个 task"
+    if not ref_label:
+        return "请先选择要排除的引用"
+    return f"修改 task {task_id}，重新生成，并排除历史引用：{ref_label}"
+
+
+def _extract_excluded_memory_refs(message: str) -> list[str]:
+    match = re.search(r"排除历史引用[:：]\s*(.+)", message or "")
+    if not match:
+        return []
+    raw = match.group(1).strip()
+    raw = re.split(r"\n|【输出要求】|【目标平台】", raw)[0].strip()
+    return [part.strip() for part in re.split(r"[;；]", raw) if part.strip()]
+
+
+def _note_matches_excluded_ref(note, excluded_refs: list[str]) -> bool:
+    if not excluded_refs:
+        return False
+    haystack = " / ".join(
+        str(part)
+        for part in [
+            getattr(note, "title", ""),
+            getattr(note, "heading", ""),
+            getattr(note, "source", ""),
+        ]
+        if part
+    )
+    return any(term and term in haystack for term in excluded_refs)
+
+
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
     """保存各平台 Markdown，小红书同步生成 HTML 配图，并打包成 zip 供一键下载，返回可下载的文件列表。"""
     files = []
@@ -1430,6 +1476,7 @@ class ChatAgent:
         has_source_material = intent.get("has_source_material", False)
         revision_meta = None
         normalized_memory_mode = _normalize_memory_mode(memory_mode)
+        excluded_memory_refs = _extract_excluded_memory_refs(original_message)
         if not topic or len(topic) < 5:
             topic = original_message
 
@@ -1522,6 +1569,7 @@ class ChatAgent:
             memory_context, memory_refs = self._build_memory_context_with_refs(
                 topic,
                 include_notes=include_memory_notes,
+                excluded_refs=excluded_memory_refs,
             )
             if memory_context:
                 raw_notes = f"{raw_notes}\n\n{memory_context}"
@@ -1845,7 +1893,12 @@ class ChatAgent:
     def _build_memory_context(self, topic: str) -> str:
         return self._build_memory_context_with_refs(topic)[0]
 
-    def _build_memory_context_with_refs(self, topic: str, include_notes: bool = True) -> tuple[str, list[dict]]:
+    def _build_memory_context_with_refs(
+        self,
+        topic: str,
+        include_notes: bool = True,
+        excluded_refs: Optional[list[str]] = None,
+    ) -> tuple[str, list[dict]]:
         """构建记忆上下文：包含用户偏好和相关笔记检索结果。
 
         返回 (上下文文本, 引用来源列表)。
@@ -1878,6 +1931,8 @@ class ChatAgent:
         # 2. 向量检索相关笔记
         try:
             notes = self.memory.search_notes(topic, top_k=3, min_score=0.4)
+            if excluded_refs:
+                notes = [n for n in notes if not _note_matches_excluded_ref(n, excluded_refs)]
             if notes:
                 note_lines = []
                 for n in notes:
@@ -2095,13 +2150,13 @@ def create_chat_ui():
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
         if not gzh_file_path:
-            history_md, history_update = refresh_generated_history_controls()
-            return "❌ 请先生成公众号内容", history_md, history_update
+            history_md, history_update, ref_update = refresh_generated_history_controls()
+            return "❌ 请先生成公众号内容", history_md, history_update, ref_update
         if not cover_image:
-            history_md, history_update = refresh_generated_history_controls()
+            history_md, history_update, ref_update = refresh_generated_history_controls()
             task_id = _task_id_from_generated_file(gzh_file_path)
             target_line = f"\n当前待发布：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-            return f"❌ 请上传封面图片{target_line}", history_md, history_update
+            return f"❌ 请上传封面图片{target_line}", history_md, history_update, ref_update
         
         try:
             from content_agent.publisher import publish_wechat_draft
@@ -2126,9 +2181,9 @@ def create_chat_ui():
                         message=result.get("message", "发布成功"),
                         details=result.get("details", ""),
                     )
-                history_md, history_update = refresh_generated_history_controls()
+                history_md, history_update, ref_update = refresh_generated_history_controls()
                 target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-                return f"✅ {result.get('message', '发布成功')}{target_line}\n已更新历史任务发布状态。", history_md, history_update
+                return f"✅ {result.get('message', '发布成功')}{target_line}\n已更新历史任务发布状态。", history_md, history_update, ref_update
             else:
                 if task_id:
                     save_publish_status(
@@ -2138,9 +2193,9 @@ def create_chat_ui():
                         message=result.get("message", "发布失败"),
                         details=result.get("details", ""),
                     )
-                history_md, history_update = refresh_generated_history_controls()
+                history_md, history_update, ref_update = refresh_generated_history_controls()
                 target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-                return f"❌ {result.get('message', '发布失败')}{target_line}\n详情: {result.get('details', '')}\n已记录到历史任务，可稍后重试。", history_md, history_update
+                return f"❌ {result.get('message', '发布失败')}{target_line}\n详情: {result.get('details', '')}\n已记录到历史任务，可稍后重试。", history_md, history_update, ref_update
         except Exception as e:
             task_id = _task_id_from_generated_file(gzh_file_path)
             if task_id:
@@ -2151,9 +2206,9 @@ def create_chat_ui():
                     message="发布异常",
                     details=str(e),
                 )
-            history_md, history_update = refresh_generated_history_controls()
+            history_md, history_update, ref_update = refresh_generated_history_controls()
             target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-            return f"❌ 发布异常: {str(e)}{target_line}\n已记录到历史任务，可稍后重试。", history_md, history_update
+            return f"❌ 发布异常: {str(e)}{target_line}\n已记录到历史任务，可稍后重试。", history_md, history_update, ref_update
 
     def refresh_generated_history():
         """刷新历史任务面板"""
@@ -2164,9 +2219,12 @@ def create_chat_ui():
         """刷新历史任务面板和可操作任务列表。"""
         items = agent.memory.list_generated_history(limit=8)
         choices = _list_history_task_choices(agent.memory, limit=20)
+        selected = choices[0] if choices else None
+        ref_choices = _list_history_memory_ref_choices(agent.memory, selected) if selected else []
         return (
             _format_generated_history(items, limit=8),
-            gr.update(choices=choices, value=choices[0] if choices else None),
+            gr.update(choices=choices, value=selected),
+            gr.update(choices=ref_choices, value=ref_choices[0] if ref_choices else None),
         )
 
     def view_history_article(task_id, chat_history):
@@ -2193,6 +2251,13 @@ def create_chat_ui():
         if not task_id:
             return "请先在历史任务里选择一个 task"
         return _history_continue_command(task_id)
+
+    def refresh_history_ref_choices(task_id):
+        choices = _list_history_memory_ref_choices(agent.memory, task_id)
+        return gr.update(choices=choices, value=choices[0] if choices else None)
+
+    def fill_exclude_ref_command(task_id, ref_label):
+        return _exclude_ref_command(task_id, ref_label)
 
     def load_history_for_publish(task_id):
         status, file_path = _load_history_publish_target(agent.memory, task_id)
@@ -2685,10 +2750,22 @@ def create_chat_ui():
                             value=history_choices[0] if history_choices else None,
                             interactive=True,
                         )
+                        history_ref_choices = (
+                            _list_history_memory_ref_choices(agent.memory, history_choices[0])
+                            if history_choices else []
+                        )
+                        history_ref_select = gr.Dropdown(
+                            label="选择要排除的引用",
+                            choices=history_ref_choices,
+                            value=history_ref_choices[0] if history_ref_choices else None,
+                            interactive=True,
+                        )
                         with gr.Row():
                             view_history_btn = gr.Button("查看全文", size="sm", variant="secondary")
                             continue_history_btn = gr.Button("填入继续修改", size="sm", variant="secondary")
                             load_publish_history_btn = gr.Button("加载到发布区", size="sm", variant="secondary")
+                            refresh_history_refs_btn = gr.Button("刷新引用", size="sm", variant="secondary")
+                            exclude_ref_btn = gr.Button("排除引用重写", size="sm", variant="secondary")
                         history_panel = gr.Markdown(
                             _format_generated_history(agent.memory.list_generated_history(limit=8), limit=8),
                             elem_classes=["history-scroll"],
@@ -2781,12 +2858,12 @@ def create_chat_ui():
         publish_btn.click(
             publish_gzh,
             inputs=[cover_upload, last_gzh_file],
-            outputs=[pub_status, history_panel, history_task_select]
+            outputs=[pub_status, history_panel, history_task_select, history_ref_select]
         )
 
         refresh_history_btn.click(
             refresh_generated_history_controls,
-            outputs=[history_panel, history_task_select],
+            outputs=[history_panel, history_task_select, history_ref_select],
         )
 
         view_history_btn.click(
@@ -2798,6 +2875,18 @@ def create_chat_ui():
         continue_history_btn.click(
             fill_history_continue_command,
             inputs=[history_task_select],
+            outputs=[msg_input],
+        )
+
+        refresh_history_refs_btn.click(
+            refresh_history_ref_choices,
+            inputs=[history_task_select],
+            outputs=[history_ref_select],
+        )
+
+        exclude_ref_btn.click(
+            fill_exclude_ref_command,
+            inputs=[history_task_select, history_ref_select],
             outputs=[msg_input],
         )
 

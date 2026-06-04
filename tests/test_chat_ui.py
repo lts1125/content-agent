@@ -2,6 +2,7 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 
 
 import chat_ui
@@ -801,6 +802,93 @@ class ChatIntentTest(unittest.TestCase):
             self.assertIn("# 最近文章", notes)
             self.assertIn("把刚才那篇改得更通俗一点", notes)
             self.assertEqual("chat_20260601_120000", meta["task_id"])
+
+    def test_history_memory_ref_choices_are_loaded_from_task(self):
+        with TemporaryDirectory() as tmp_dir:
+            gzh_path = Path(tmp_dir) / "gongzhonghao.md"
+            gzh_path.write_text("# 文章", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_130000",
+                            "platforms": '["gongzhonghao"]',
+                            "files": json.dumps([str(gzh_path)]),
+                            "memory_refs": json.dumps([
+                                {
+                                    "title": "todo",
+                                    "heading": "记忆系统",
+                                    "source": "todo.md",
+                                }
+                            ], ensure_ascii=False),
+                        }
+                    ]
+
+            choices = chat_ui._list_history_memory_ref_choices(
+                FakeMemory(),
+                "chat_20260601_130000",
+            )
+
+            self.assertEqual(["todo / 记忆系统 / todo.md"], choices)
+
+    def test_exclude_ref_command_and_parser(self):
+        command = chat_ui._exclude_ref_command(
+            "chat_20260601_130000",
+            "todo / 记忆系统 / todo.md",
+        )
+
+        self.assertIn("修改 task chat_20260601_130000", command)
+        self.assertEqual(
+            ["todo / 记忆系统 / todo.md"],
+            chat_ui._extract_excluded_memory_refs(command),
+        )
+
+    def test_note_matches_excluded_ref(self):
+        note = SimpleNamespace(title="todo", heading="记忆系统", source="todo.md")
+
+        self.assertTrue(chat_ui._note_matches_excluded_ref(note, ["todo / 记忆系统"]))
+        self.assertFalse(chat_ui._note_matches_excluded_ref(note, ["phase5_cli_usage"]))
+
+    def test_memory_context_can_exclude_selected_ref(self):
+        agent = chat_ui.ChatAgent.__new__(chat_ui.ChatAgent)
+
+        notes = [
+            SimpleNamespace(
+                id=1,
+                title="todo",
+                heading="记忆系统",
+                source="todo.md",
+                text="这条应该被排除",
+                distance=0.1,
+            ),
+            SimpleNamespace(
+                id=2,
+                title="phase5_cli_usage",
+                heading="完整示例",
+                source="phase5_cli_usage.md",
+                text="这条应该保留",
+                distance=0.2,
+            ),
+        ]
+
+        class FakeMemory:
+            def get_preferences(self):
+                return {}
+
+            def search_notes(self, topic, top_k=3, min_score=0.4):
+                return notes
+
+        agent.memory = FakeMemory()
+
+        context, refs = agent._build_memory_context_with_refs(
+            "生成公众号文章",
+            excluded_refs=["todo / 记忆系统"],
+        )
+
+        self.assertNotIn("这条应该被排除", context)
+        self.assertIn("这条应该保留", context)
+        self.assertEqual(["phase5_cli_usage"], [ref["title"] for ref in refs])
 
 
 class GongzhonghaoPopularPromptTest(unittest.TestCase):
