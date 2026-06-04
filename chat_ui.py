@@ -323,13 +323,25 @@ def _load_history_publish_target(memory, task_id: str) -> tuple[str, str]:
     """把历史公众号文章加载为当前待发布文件。"""
     if not task_id:
         return "⚠️ 请先选择一个历史任务。", ""
-    _, gzh_file = _find_history_task(memory, task_id)
+    item, gzh_file = _find_history_task(memory, task_id)
     if not gzh_file:
         return f"❌ 没有找到 task {task_id} 对应的公众号文章文件。", ""
     path = Path(gzh_file)
     if not path.exists():
         return f"❌ 历史文章文件不存在：{gzh_file}", ""
-    return f"✅ 已加载历史任务 `{task_id}` 到发布区。请上传封面后保存到公众号草稿箱。", gzh_file
+
+    status = (
+        f"✅ 已加载历史任务 `{task_id}` 到发布区。\n"
+        f"文件：{gzh_file}\n"
+        "请上传封面后保存到公众号草稿箱。"
+    )
+    publish_status = (item or {}).get("publish_status") or ""
+    publish_details = (item or {}).get("publish_details") or ""
+    if publish_status == "failed" and publish_details:
+        status += f"\n\n上次失败原因：{publish_details}"
+    elif publish_status == "draft_saved":
+        status += "\n\n当前历史状态：已保存过草稿，可再次保存为新草稿。"
+    return status, gzh_file
 
 
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
@@ -2069,9 +2081,13 @@ def create_chat_ui():
     def publish_gzh(cover_image, gzh_file_path):
         """发布到微信公众号草稿箱"""
         if not gzh_file_path:
-            return "❌ 请先生成公众号内容", refresh_generated_history()
+            history_md, history_update = refresh_generated_history_controls()
+            return "❌ 请先生成公众号内容", history_md, history_update
         if not cover_image:
-            return "❌ 请上传封面图片", refresh_generated_history()
+            history_md, history_update = refresh_generated_history_controls()
+            task_id = _task_id_from_generated_file(gzh_file_path)
+            target_line = f"\n当前待发布：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
+            return f"❌ 请上传封面图片{target_line}", history_md, history_update
         
         try:
             from content_agent.publisher import publish_wechat_draft
@@ -2096,7 +2112,9 @@ def create_chat_ui():
                         message=result.get("message", "发布成功"),
                         details=result.get("details", ""),
                     )
-                return f"✅ {result.get('message', '发布成功')}", refresh_generated_history()
+                history_md, history_update = refresh_generated_history_controls()
+                target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
+                return f"✅ {result.get('message', '发布成功')}{target_line}\n已更新历史任务发布状态。", history_md, history_update
             else:
                 if task_id:
                     save_publish_status(
@@ -2106,7 +2124,9 @@ def create_chat_ui():
                         message=result.get("message", "发布失败"),
                         details=result.get("details", ""),
                     )
-                return f"❌ {result.get('message', '发布失败')}\n详情: {result.get('details', '')}", refresh_generated_history()
+                history_md, history_update = refresh_generated_history_controls()
+                target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
+                return f"❌ {result.get('message', '发布失败')}{target_line}\n详情: {result.get('details', '')}\n已记录到历史任务，可稍后重试。", history_md, history_update
         except Exception as e:
             task_id = _task_id_from_generated_file(gzh_file_path)
             if task_id:
@@ -2117,7 +2137,9 @@ def create_chat_ui():
                     message="发布异常",
                     details=str(e),
                 )
-            return f"❌ 发布异常: {str(e)}", refresh_generated_history()
+            history_md, history_update = refresh_generated_history_controls()
+            target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
+            return f"❌ 发布异常: {str(e)}{target_line}\n已记录到历史任务，可稍后重试。", history_md, history_update
 
     def refresh_generated_history():
         """刷新历史任务面板"""
@@ -2745,7 +2767,7 @@ def create_chat_ui():
         publish_btn.click(
             publish_gzh,
             inputs=[cover_upload, last_gzh_file],
-            outputs=[pub_status, history_panel]
+            outputs=[pub_status, history_panel, history_task_select]
         )
 
         refresh_history_btn.click(

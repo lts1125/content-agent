@@ -526,6 +526,54 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("已加载历史任务", status)
         self.assertEqual(str(article_path), file_path)
 
+    def test_load_history_publish_target_shows_previous_failure_detail(self):
+        with TemporaryDirectory() as tmp_dir:
+            article_path = Path(tmp_dir) / "gongzhonghao.md"
+            article_path.write_text("# 历史文章\n\n正文", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_100000",
+                            "files": json.dumps([str(article_path)]),
+                            "publish_status": "failed",
+                            "publish_details": "无法连接到服务器",
+                        }
+                    ]
+
+            status, file_path = chat_ui._load_history_publish_target(
+                FakeMemory(),
+                "chat_20260601_100000",
+            )
+
+        self.assertIn("上次失败原因", status)
+        self.assertIn("无法连接到服务器", status)
+        self.assertEqual(str(article_path), file_path)
+
+    def test_load_history_publish_target_shows_saved_draft_state(self):
+        with TemporaryDirectory() as tmp_dir:
+            article_path = Path(tmp_dir) / "gongzhonghao.md"
+            article_path.write_text("# 历史文章\n\n正文", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_100000",
+                            "files": json.dumps([str(article_path)]),
+                            "publish_status": "draft_saved",
+                        }
+                    ]
+
+            status, file_path = chat_ui._load_history_publish_target(
+                FakeMemory(),
+                "chat_20260601_100000",
+            )
+
+        self.assertIn("已保存过草稿", status)
+        self.assertEqual(str(article_path), file_path)
+
     def test_load_history_publish_target_requires_task(self):
         status, file_path = chat_ui._load_history_publish_target(None, "")
 
