@@ -319,6 +319,19 @@ def _history_continue_command(task_id: str, instruction: str = "把开头写得�
     return f"修改 task {task_id}，{instruction}"
 
 
+def _load_history_publish_target(memory, task_id: str) -> tuple[str, str]:
+    """把历史公众号文章加载为当前待发布文件。"""
+    if not task_id:
+        return "⚠️ 请先选择一个历史任务。", ""
+    _, gzh_file = _find_history_task(memory, task_id)
+    if not gzh_file:
+        return f"❌ 没有找到 task {task_id} 对应的公众号文章文件。", ""
+    path = Path(gzh_file)
+    if not path.exists():
+        return f"❌ 历史文章文件不存在：{gzh_file}", ""
+    return f"✅ 已加载历史任务 `{task_id}` 到发布区。请上传封面后保存到公众号草稿箱。", gzh_file
+
+
 def _save_generated_markdown_files(content, platforms: list, output_dir: Path) -> list[str]:
     """保存各平台 Markdown，小红书同步生成 HTML 配图，并打包成 zip 供一键下载，返回可下载的文件列表。"""
     files = []
@@ -2144,6 +2157,11 @@ def create_chat_ui():
         if not task_id:
             return "请先在历史任务里选择一个 task"
         return _history_continue_command(task_id)
+
+    def load_history_for_publish(task_id):
+        status, file_path = _load_history_publish_target(agent.memory, task_id)
+        files = [file_path] if file_path else []
+        return status, file_path, *_download_button_updates(files)
     
     # 构建界面 - 使用系统字体避免加载 Google Fonts（国内网络阻塞问题）
     theme = gr.themes.Soft(
@@ -2634,6 +2652,7 @@ def create_chat_ui():
                         with gr.Row():
                             view_history_btn = gr.Button("查看全文", size="sm", variant="secondary")
                             continue_history_btn = gr.Button("填入继续修改", size="sm", variant="secondary")
+                            load_publish_history_btn = gr.Button("加载到发布区", size="sm", variant="secondary")
                         history_panel = gr.Markdown(
                             _format_generated_history(agent.memory.list_generated_history(limit=8), limit=8),
                             elem_classes=["history-scroll"],
@@ -2744,6 +2763,12 @@ def create_chat_ui():
             fill_history_continue_command,
             inputs=[history_task_select],
             outputs=[msg_input],
+        )
+
+        load_publish_history_btn.click(
+            load_history_for_publish,
+            inputs=[history_task_select],
+            outputs=[pub_status, last_gzh_file, download_gzh, download_xhs, download_dy],
         )
 
         save_pref_btn.click(

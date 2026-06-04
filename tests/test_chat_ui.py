@@ -504,6 +504,52 @@ class ChatProgressTest(unittest.TestCase):
 
         self.assertEqual("修改 task chat_20260601_100000，把开头写得更抓人", command)
 
+    def test_load_history_publish_target_returns_existing_gongzhonghao_file(self):
+        with TemporaryDirectory() as tmp_dir:
+            article_path = Path(tmp_dir) / "gongzhonghao.md"
+            article_path.write_text("# 历史文章\n\n正文", encoding="utf-8")
+
+            class FakeMemory:
+                def list_generated_history(self, limit=50):
+                    return [
+                        {
+                            "task_id": "chat_20260601_100000",
+                            "files": json.dumps([str(article_path)]),
+                        }
+                    ]
+
+            status, file_path = chat_ui._load_history_publish_target(
+                FakeMemory(),
+                "chat_20260601_100000",
+            )
+
+        self.assertIn("已加载历史任务", status)
+        self.assertEqual(str(article_path), file_path)
+
+    def test_load_history_publish_target_requires_task(self):
+        status, file_path = chat_ui._load_history_publish_target(None, "")
+
+        self.assertIn("请先选择", status)
+        self.assertEqual("", file_path)
+
+    def test_load_history_publish_target_handles_missing_file(self):
+        class FakeMemory:
+            def list_generated_history(self, limit=50):
+                return [
+                    {
+                        "task_id": "chat_20260601_100000",
+                        "files": '["/tmp/not-exist/gongzhonghao.md"]',
+                    }
+                ]
+
+        status, file_path = chat_ui._load_history_publish_target(
+            FakeMemory(),
+            "chat_20260601_100000",
+        )
+
+        self.assertIn("历史文章文件不存在", status)
+        self.assertEqual("", file_path)
+
 
 class ChatIntentTest(unittest.TestCase):
     def test_tail_instruction_wins_over_body_platform_mentions(self):
