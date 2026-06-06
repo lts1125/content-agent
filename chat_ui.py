@@ -359,6 +359,55 @@ def _format_cover_upload_status(cover_path: Optional[str]) -> str:
     return f"封面状态：已选择 `{name}`"
 
 
+def _cover_upload_file_name(cover_path: Optional[str]) -> str:
+    if not cover_path:
+        return ""
+    if isinstance(cover_path, dict):
+        raw_path = cover_path.get("path") or cover_path.get("name") or ""
+    else:
+        raw_path = (
+            getattr(cover_path, "path", None)
+            or getattr(cover_path, "name", None)
+            or str(cover_path)
+        )
+    return Path(str(raw_path)).name if raw_path else ""
+
+
+def _format_publish_review_summary(gzh_file_path: Optional[str], cover_path: Optional[str] = None) -> str:
+    if not gzh_file_path:
+        return (
+            "### 发布前核对\n"
+            "- 公众号文章：等待生成或从历史任务加载\n"
+            "- 封面图：尚未选择\n"
+            "- 状态：请先准备文章和封面"
+        )
+
+    path = Path(str(gzh_file_path))
+    task_id = _task_id_from_generated_file(str(gzh_file_path))
+    title = _extract_markdown_title(str(gzh_file_path)) or "未识别标题"
+    word_count = "未知"
+    if path.exists() and path.is_file():
+        try:
+            content = path.read_text(encoding="utf-8")
+            word_count = str(len(content.strip()))
+        except Exception:
+            word_count = "读取失败"
+
+    cover_name = _cover_upload_file_name(cover_path)
+    cover_line = f"已选择 `{cover_name}`" if cover_name else "尚未选择"
+    status = "可保存草稿，保存前请勾选确认" if cover_name else "请先上传封面"
+    task_line = f"- task：`{task_id}`\n" if task_id else ""
+    return (
+        "### 发布前核对\n"
+        f"- 标题：{title}\n"
+        f"- 字数：约 {word_count} 字\n"
+        f"{task_line}"
+        f"- 文件：`{gzh_file_path}`\n"
+        f"- 封面图：{cover_line}\n"
+        f"- 状态：{status}"
+    )
+
+
 def _memory_ref_label(ref: dict) -> str:
     title = ref.get("title") or "未命名笔记"
     source = ref.get("source") or ""
@@ -527,6 +576,13 @@ def _download_button_updates(files):
         gr.update(value=by_platform.get("gongzhonghao"), visible=bool(by_platform.get("gongzhonghao"))),
         gr.update(value=by_platform.get("xiaohongshu"), visible=bool(by_platform.get("xiaohongshu"))),
         gr.update(value=by_platform.get("douyin"), visible=bool(by_platform.get("douyin"))),
+    )
+
+
+def _publish_guard_updates(gzh_file_path: Optional[str], cover_path: Optional[str] = None):
+    return (
+        gr.update(value=_format_publish_review_summary(gzh_file_path, cover_path)),
+        gr.update(value=False),
     )
 
 
@@ -2184,6 +2240,7 @@ def _respond_stream(agent, message, chat_history, note_file=None, memory_mode: s
             gr.update(visible=False),
             None,
             _format_preference_summary_html(_get_agent_preferences(agent)),
+            *_publish_guard_updates(""),
         )
         return
 
@@ -2214,6 +2271,7 @@ def _respond_stream(agent, message, chat_history, note_file=None, memory_mode: s
                 gr.update(visible=False),
                 None,
                 _format_preference_summary_html(_get_agent_preferences(agent)),
+                *_publish_guard_updates(gzh_path),
             )
             continue
 
@@ -2245,6 +2303,7 @@ def _respond_stream(agent, message, chat_history, note_file=None, memory_mode: s
                 gr.update(visible=show_review),
                 review_panel_data,
                 _format_preference_summary_html(_get_agent_preferences(agent)),
+                *_publish_guard_updates(gzh_path),
             )
             return
 
@@ -2261,6 +2320,7 @@ def _respond_stream(agent, message, chat_history, note_file=None, memory_mode: s
         gr.update(visible=False),
         None,
         _format_preference_summary_html(_get_agent_preferences(agent)),
+        *_publish_guard_updates(gzh_path),
     )
 
 
@@ -2284,6 +2344,7 @@ def create_chat_ui():
             gr.update(visible=False),
             None,
             _format_preference_summary_html(_get_agent_preferences(agent)),
+            *_publish_guard_updates(""),
         )
 
     def save_preference_controls(reader, style, length, weak_dimensions):
@@ -2344,16 +2405,26 @@ def create_chat_ui():
             _format_user_preferences(prefs),
         )
     
-    def publish_gzh(cover_image, gzh_file_path):
+    def publish_gzh(cover_image, gzh_file_path, publish_confirmed):
         """发布到微信公众号草稿箱"""
         if not gzh_file_path:
             history_md, history_update, ref_update = refresh_generated_history_controls()
-            return "❌ 请先生成公众号内容", history_md, history_update, ref_update
+            return "❌ 请先生成公众号内容", history_md, history_update, ref_update, gr.update(value=False)
         if not cover_image:
             history_md, history_update, ref_update = refresh_generated_history_controls()
             task_id = _task_id_from_generated_file(gzh_file_path)
             target_line = f"\n当前待发布：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-            return f"❌ 请上传封面图片{target_line}", history_md, history_update, ref_update
+            return f"❌ 请上传封面图片{target_line}", history_md, history_update, ref_update, gr.update(value=False)
+        if not publish_confirmed:
+            history_md, history_update, ref_update = refresh_generated_history_controls()
+            summary = _format_publish_review_summary(gzh_file_path, cover_image)
+            return (
+                f"❌ 发布前请先勾选“我已核对文章、封面和发布目标”。\n\n{summary}",
+                history_md,
+                history_update,
+                ref_update,
+                gr.update(value=False),
+            )
         
         try:
             from content_agent.publisher import publish_wechat_draft
@@ -2380,7 +2451,7 @@ def create_chat_ui():
                     )
                 history_md, history_update, ref_update = refresh_generated_history_controls()
                 target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-                return f"✅ {result.get('message', '发布成功')}{target_line}\n已更新历史任务发布状态。", history_md, history_update, ref_update
+                return f"✅ {result.get('message', '发布成功')}{target_line}\n已更新历史任务发布状态。", history_md, history_update, ref_update, gr.update(value=False)
             else:
                 if task_id:
                     save_publish_status(
@@ -2392,7 +2463,7 @@ def create_chat_ui():
                     )
                 history_md, history_update, ref_update = refresh_generated_history_controls()
                 target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-                return f"❌ {result.get('message', '发布失败')}{target_line}\n详情: {result.get('details', '')}\n已记录到历史任务，可稍后重试。", history_md, history_update, ref_update
+                return f"❌ {result.get('message', '发布失败')}{target_line}\n详情: {result.get('details', '')}\n已记录到历史任务，可稍后重试。", history_md, history_update, ref_update, gr.update(value=False)
         except Exception as e:
             task_id = _task_id_from_generated_file(gzh_file_path)
             if task_id:
@@ -2405,7 +2476,7 @@ def create_chat_ui():
                 )
             history_md, history_update, ref_update = refresh_generated_history_controls()
             target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
-            return f"❌ 发布异常: {str(e)}{target_line}\n已记录到历史任务，可稍后重试。", history_md, history_update, ref_update
+            return f"❌ 发布异常: {str(e)}{target_line}\n已记录到历史任务，可稍后重试。", history_md, history_update, ref_update, gr.update(value=False)
 
     def refresh_generated_history():
         """刷新历史任务面板"""
@@ -2428,7 +2499,7 @@ def create_chat_ui():
         chat_history = list(chat_history or [])
         if not task_id:
             chat_history.append({"role": "assistant", "content": "⚠️ 请先选择一个历史任务。"})
-            return _copy_chat_history(chat_history), "", *_download_button_updates([])
+            return _copy_chat_history(chat_history), "", *_download_button_updates([]), *_publish_guard_updates("")
         try:
             article, file_path = _read_history_gongzhonghao_article(agent.memory, task_id)
             chat_history.append({
@@ -2439,10 +2510,10 @@ def create_chat_ui():
                     f"---\n\n{article}"
                 ),
             })
-            return _copy_chat_history(chat_history), file_path, *_download_button_updates([file_path])
+            return _copy_chat_history(chat_history), file_path, *_download_button_updates([file_path]), *_publish_guard_updates(file_path)
         except Exception as exc:
             chat_history.append({"role": "assistant", "content": f"❌ 读取历史文章失败：{exc}"})
-            return _copy_chat_history(chat_history), "", *_download_button_updates([])
+            return _copy_chat_history(chat_history), "", *_download_button_updates([]), *_publish_guard_updates("")
 
     def fill_history_continue_command(task_id):
         if not task_id:
@@ -2459,7 +2530,7 @@ def create_chat_ui():
     def load_history_for_publish(task_id):
         status, file_path = _load_history_publish_target(agent.memory, task_id)
         files = [file_path] if file_path else []
-        return status, file_path, *_download_button_updates(files)
+        return status, file_path, *_download_button_updates(files), *_publish_guard_updates(file_path)
     
     # 构建界面 - 使用系统字体避免加载 Google Fonts（国内网络阻塞问题）
     theme = gr.themes.Soft(
@@ -2748,6 +2819,21 @@ def create_chat_ui():
             font-size: 13px;
             margin-top: -6px;
         }
+        .publish-review-summary {
+            background: #f8fafc;
+            border: 1px solid var(--ca-border);
+            border-radius: 8px;
+            color: var(--ca-text);
+            padding: 8px 10px;
+        }
+        .publish-review-summary h3 {
+            font-size: 14px;
+            margin: 0 0 4px;
+        }
+        .publish-review-summary ul {
+            margin: 0;
+            padding-left: 18px;
+        }
         @media (max-width: 900px) {
             .workflow-steps {
                 grid-template-columns: repeat(2, 1fr);
@@ -3005,6 +3091,14 @@ def create_chat_ui():
                         elem_classes=["cover-upload-status"],
                     )
                 with gr.Column(scale=5):
+                    publish_review_summary = gr.Markdown(
+                        _format_publish_review_summary(""),
+                        elem_classes=["publish-review-summary"],
+                    )
+                    publish_confirm = gr.Checkbox(
+                        label="我已核对文章、封面和发布目标",
+                        value=False,
+                    )
                     pub_status = gr.Textbox(
                         label="发布状态",
                         value="等待生成公众号内容...",
@@ -3018,18 +3112,18 @@ def create_chat_ui():
         send_btn.click(
             respond,
             inputs=[msg_input, chatbot, note_upload, memory_mode],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         
         msg_input.submit(
             respond,
             inputs=[msg_input, chatbot, note_upload, memory_mode],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         
         clear_btn.click(
             clear_history,
-            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         
         # 快捷按钮事件
@@ -3054,32 +3148,35 @@ def create_chat_ui():
         btn_creator.click(
             quick_creator,
             inputs=[note_upload, memory_mode],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         btn_gzh.click(
             quick_gzh,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         btn_xhs.click(
             quick_xhs,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         btn_dy.click(
             quick_dy,
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         
         # 发布按钮事件
         cover_upload.upload(
-            _format_cover_upload_status,
-            inputs=[cover_upload],
-            outputs=[cover_upload_status],
+            lambda cover, gzh: (
+                _format_cover_upload_status(cover),
+                *_publish_guard_updates(gzh, cover),
+            ),
+            inputs=[cover_upload, last_gzh_file],
+            outputs=[cover_upload_status, publish_review_summary, publish_confirm],
         )
 
         publish_btn.click(
             publish_gzh,
-            inputs=[cover_upload, last_gzh_file],
-            outputs=[pub_status, history_panel, history_task_select, history_ref_select]
+            inputs=[cover_upload, last_gzh_file, publish_confirm],
+            outputs=[pub_status, history_panel, history_task_select, history_ref_select, publish_confirm]
         )
 
         refresh_history_btn.click(
@@ -3090,7 +3187,7 @@ def create_chat_ui():
         view_history_btn.click(
             view_history_article,
             inputs=[history_task_select, chatbot],
-            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy],
+            outputs=[chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, publish_review_summary, publish_confirm],
         )
 
         continue_history_btn.click(
@@ -3114,7 +3211,7 @@ def create_chat_ui():
         load_publish_history_btn.click(
             load_history_for_publish,
             inputs=[history_task_select],
-            outputs=[pub_status, last_gzh_file, download_gzh, download_xhs, download_dy],
+            outputs=[pub_status, last_gzh_file, download_gzh, download_xhs, download_dy, publish_review_summary, publish_confirm],
         )
 
         save_pref_btn.click(
@@ -3175,6 +3272,7 @@ def create_chat_ui():
                     *_download_button_updates([]),
                     gr.update(value="", visible=False),
                     _format_preference_summary_html(_get_agent_preferences(agent)),
+                    *_publish_guard_updates(""),
                 )
 
             panel = panel_data
@@ -3237,6 +3335,7 @@ def create_chat_ui():
                     *_download_button_updates(files),
                     gr.update(value=xiaohongshu_html, visible=bool(xiaohongshu_html)),
                     _format_preference_summary_html(_get_agent_preferences(agent)),
+                    *_publish_guard_updates(gzh_path),
                 )
 
             if action == "revise":
@@ -3249,6 +3348,7 @@ def create_chat_ui():
                     *_download_button_updates([]),
                     gr.update(value="", visible=False),
                     _format_preference_summary_html(_get_agent_preferences(agent)),
+                    *_publish_guard_updates(""),
                 )
 
             if action == "retry":
@@ -3261,6 +3361,7 @@ def create_chat_ui():
                     *_download_button_updates([]),
                     gr.update(value="", visible=False),
                     _format_preference_summary_html(_get_agent_preferences(agent)),
+                    *_publish_guard_updates(""),
                 )
 
             chat_history.append({"role": "assistant", "content": "未知的审核决策。"})
@@ -3272,6 +3373,7 @@ def create_chat_ui():
                 *_download_button_updates([]),
                 gr.update(value="", visible=False),
                 _format_preference_summary_html(_get_agent_preferences(agent)),
+                *_publish_guard_updates(""),
             )
 
         def on_revise_generate(panel_data, chat_history):
@@ -3287,6 +3389,7 @@ def create_chat_ui():
                     gr.update(visible=False),
                     None,
                     _format_preference_summary_html(_get_agent_preferences(agent)),
+                    *_publish_guard_updates(""),
                 )
                 return
 
@@ -3306,6 +3409,7 @@ def create_chat_ui():
                     gr.update(visible=False),
                     panel,
                     _format_preference_summary_html(_get_agent_preferences(agent)),
+                    *_publish_guard_updates(""),
                 )
                 return
 
@@ -3329,6 +3433,7 @@ def create_chat_ui():
                 gr.update(visible=False),
                 panel,
                 _format_preference_summary_html(_get_agent_preferences(agent)),
+                *_publish_guard_updates(""),
             )
 
             # 自动携带修改意见重新生成
@@ -3337,17 +3442,17 @@ def create_chat_ui():
         btn_revise.click(
             on_revise_generate,
             inputs=[review_state, chatbot],
-            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary]
+            outputs=[msg_input, chatbot, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, review_row, review_state, preference_summary, publish_review_summary, publish_confirm]
         )
         btn_ignore.click(
             lambda panel, hist: on_review_decision("ignore", panel, hist),
             inputs=[review_state, chatbot],
-            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, preference_summary]
+            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, preference_summary, publish_review_summary, publish_confirm]
         )
         btn_force.click(
             lambda panel, hist: on_review_decision("force_publish", panel, hist),
             inputs=[review_state, chatbot],
-            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, preference_summary]
+            outputs=[chatbot, review_row, review_state, last_gzh_file, download_gzh, download_xhs, download_dy, xhs_preview, preference_summary, publish_review_summary, publish_confirm]
         )
 
         # 使用说明

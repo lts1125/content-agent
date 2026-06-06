@@ -62,12 +62,37 @@ class ChatUiConfigTest(unittest.TestCase):
         self.assertIn("封面状态", labels)
         self.assertIn("尚未选择封面", labels)
 
+    def test_publish_review_gate_is_visible_in_ui_config(self):
+        demo = chat_ui.create_chat_ui()
+        labels = json.dumps(demo.get_config_file(), ensure_ascii=False, default=str)
+
+        self.assertIn("发布前核对", labels)
+        self.assertIn("我已核对文章、封面和发布目标", labels)
+
 
 class ChatProgressTest(unittest.TestCase):
     def test_format_cover_upload_status_shows_filename(self):
         self.assertIn("尚未选择封面", chat_ui._format_cover_upload_status(None))
         self.assertIn("cover.png", chat_ui._format_cover_upload_status("/tmp/cover.png"))
         self.assertIn("cover.jpg", chat_ui._format_cover_upload_status({"path": "/tmp/cover.jpg"}))
+
+    def test_format_publish_review_summary_lists_target_and_cover(self):
+        with TemporaryDirectory() as tmp_dir:
+            article_dir = Path(tmp_dir) / "20260606_224638"
+            article_dir.mkdir()
+            article_path = article_dir / "gongzhonghao.md"
+            article_path.write_text("# 你的AI写作助手，其实是个半成品\n\n正文", encoding="utf-8")
+
+            summary = chat_ui._format_publish_review_summary(
+                str(article_path),
+                {"path": "/tmp/cover.png"},
+            )
+
+        self.assertIn("发布前核对", summary)
+        self.assertIn("你的AI写作助手", summary)
+        self.assertIn("chat_20260606_224638", summary)
+        self.assertIn("cover.png", summary)
+        self.assertIn("可保存草稿", summary)
 
     def test_creator_workflow_prompt_requests_multi_platform_delivery(self):
         prompt = chat_ui._creator_workflow_prompt()
@@ -152,8 +177,9 @@ class ChatProgressTest(unittest.TestCase):
         self.assertEqual("assistant", first_history[1]["role"])
         self.assertIn("🔄 分析需求", first_history[1]["content"])
         self.assertEqual("生成完成", final_history[-1]["content"])
-        self.assertEqual(10, len(updates[-1]))
-        self.assertIn("当前默认", updates[-1][-1])
+        self.assertEqual(12, len(updates[-1]))
+        self.assertIn("当前默认", updates[-1][-3])
+        self.assertIn("发布前核对", str(updates[-1][-2]))
 
     def test_respond_stream_skips_upload_index_when_uploaded_only(self):
         with TemporaryDirectory() as tmp_dir:
