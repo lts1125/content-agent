@@ -55,8 +55,20 @@ class ChatUiConfigTest(unittest.TestCase):
         self.assertIn("清空弱项学习", labels)
         self.assertIn("清空公众号默认风格", labels)
 
+    def test_cover_upload_status_is_visible_in_ui_config(self):
+        demo = chat_ui.create_chat_ui()
+        labels = json.dumps(demo.get_config_file(), ensure_ascii=False, default=str)
+
+        self.assertIn("封面状态", labels)
+        self.assertIn("尚未选择封面", labels)
+
 
 class ChatProgressTest(unittest.TestCase):
+    def test_format_cover_upload_status_shows_filename(self):
+        self.assertIn("尚未选择封面", chat_ui._format_cover_upload_status(None))
+        self.assertIn("cover.png", chat_ui._format_cover_upload_status("/tmp/cover.png"))
+        self.assertIn("cover.jpg", chat_ui._format_cover_upload_status({"path": "/tmp/cover.jpg"}))
+
     def test_creator_workflow_prompt_requests_multi_platform_delivery(self):
         prompt = chat_ui._creator_workflow_prompt()
 

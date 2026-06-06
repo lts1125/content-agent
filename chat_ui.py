@@ -344,6 +344,21 @@ def _load_history_publish_target(memory, task_id: str) -> tuple[str, str]:
     return status, gzh_file
 
 
+def _format_cover_upload_status(cover_path: Optional[str]) -> str:
+    if not cover_path:
+        return "封面状态：尚未选择封面"
+    if isinstance(cover_path, dict):
+        raw_path = cover_path.get("path") or cover_path.get("name") or ""
+    else:
+        raw_path = (
+            getattr(cover_path, "path", None)
+            or getattr(cover_path, "name", None)
+            or str(cover_path)
+        )
+    name = Path(str(raw_path)).name if raw_path else "已上传封面"
+    return f"封面状态：已选择 `{name}`"
+
+
 def _memory_ref_label(ref: dict) -> str:
     title = ref.get("title") or "未命名笔记"
     source = ref.get("source") or ""
@@ -2728,6 +2743,11 @@ def create_chat_ui():
             min-height: 42px !important;
             width: 100%;
         }
+        .cover-upload-status {
+            color: var(--ca-muted);
+            font-size: 13px;
+            margin-top: -6px;
+        }
         @media (max-width: 900px) {
             .workflow-steps {
                 grid-template-columns: repeat(2, 1fr);
@@ -2980,6 +3000,10 @@ def create_chat_ui():
                         elem_classes=["cover-upload-btn"],
                     )
                     gr.Markdown("支持 JPG / PNG。上传后可直接保存到公众号草稿箱。")
+                    cover_upload_status = gr.Markdown(
+                        _format_cover_upload_status(None),
+                        elem_classes=["cover-upload-status"],
+                    )
                 with gr.Column(scale=5):
                     pub_status = gr.Textbox(
                         label="发布状态",
@@ -3046,6 +3070,12 @@ def create_chat_ui():
         )
         
         # 发布按钮事件
+        cover_upload.upload(
+            _format_cover_upload_status,
+            inputs=[cover_upload],
+            outputs=[cover_upload_status],
+        )
+
         publish_btn.click(
             publish_gzh,
             inputs=[cover_upload, last_gzh_file],
