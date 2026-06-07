@@ -20,6 +20,19 @@ echo.
 
 cd /d "%~dp0\..\bin"
 
+REM 如果没有 node.exe，下载 Windows 版 Node.js
+if not exist "node.exe" (
+    echo [→] 未发现 node.exe，正在下载 Node.js v20.x 中文镜像...
+    powershell -Command "Invoke-WebRequest -Uri 'https://npmmirror.com/mirrors/node/v20.18.1/win-x64/node.exe' -OutFile 'node.exe' -UseBasicParsing"
+    if not exist "node.exe" (
+        echo [✗] node.exe 下载失败，请手动下载并放置到 bin/ 目录
+        pause
+        exit /b 1
+    )
+    echo [✓] node.exe 下载完成
+    echo.
+)
+
 REM 清理旧的 macOS/Linux 版本依赖（如果存在）
 if exist "node_modules\@img\sharp-darwin-arm64" (
     echo [→] 清理 macOS 版 sharp 依赖...
