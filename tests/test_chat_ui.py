@@ -94,6 +94,21 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("cover.png", summary)
         self.assertIn("可保存草稿", summary)
 
+    def test_publish_archive_details_records_final_draft_cover(self):
+        details = chat_ui._build_publish_archive_details("ok", "/tmp/chatGPT_cover.png")
+
+        meta, detail_text = chat_ui._parse_publish_archive_details(details)
+
+        self.assertTrue(meta["is_final_draft"])
+        self.assertEqual("chatGPT_cover.png", meta["cover_name"])
+        self.assertEqual("ok", detail_text)
+
+    def test_parse_publish_archive_details_keeps_legacy_text(self):
+        meta, detail_text = chat_ui._parse_publish_archive_details("错误：无法连接到服务器")
+
+        self.assertEqual({}, meta)
+        self.assertEqual("错误：无法连接到服务器", detail_text)
+
     def test_creator_workflow_prompt_requests_multi_platform_delivery(self):
         prompt = chat_ui._creator_workflow_prompt()
 
@@ -532,6 +547,7 @@ class ChatProgressTest(unittest.TestCase):
                             "heading": "RAG 引用",
                         }
                     ], ensure_ascii=False),
+                    "publish_details": chat_ui._build_publish_archive_details("ok", "/tmp/cover.png"),
                 }
             ]
 
@@ -547,6 +563,8 @@ class ChatProgressTest(unittest.TestCase):
         self.assertIn("忽略 1 项建议后通过", message)
         self.assertIn("修改 task chat_20260601_150000，把开头写得更抓人", message)
         self.assertIn("已保存草稿", message)
+        self.assertIn("最终稿", message)
+        self.assertIn("cover.png", message)
         self.assertIn("公众号", message)
         self.assertIn("chat_20260601_150000", message)
         self.assertIn("gongzhonghao.md", message)

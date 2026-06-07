@@ -408,6 +408,33 @@ def _format_publish_review_summary(gzh_file_path: Optional[str], cover_path: Opt
     )
 
 
+def _build_publish_archive_details(result_details: str = "", cover_path: Optional[str] = None) -> str:
+    """构造发布归档元数据，兼容 publish_status.details 的旧文本字段。"""
+    return json.dumps(
+        {
+            "is_final_draft": True,
+            "cover_name": _cover_upload_file_name(cover_path),
+            "cover_path": str(cover_path or ""),
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "provider_details": result_details or "",
+        },
+        ensure_ascii=False,
+    )
+
+
+def _parse_publish_archive_details(details: str) -> tuple[dict, str]:
+    if not details:
+        return {}, ""
+    try:
+        data = json.loads(details)
+    except (TypeError, json.JSONDecodeError):
+        return {}, details
+    if not isinstance(data, dict):
+        return {}, str(details)
+    fallback = data.get("provider_details") or data.get("error") or ""
+    return data, str(fallback)
+
+
 def _memory_ref_label(ref: dict) -> str:
     title = ref.get("title") or "未命名笔记"
     source = ref.get("source") or ""
@@ -1081,6 +1108,7 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
         publish_status = item.get("publish_status") or ""
         publish_message = item.get("publish_message") or ""
         publish_details = item.get("publish_details") or ""
+        publish_meta, publish_detail_text = _parse_publish_archive_details(publish_details)
         memory_refs = _safe_json_load(item.get("memory_refs"), [])
         main_file = next((f for f in files if "gongzhonghao" in f and f.endswith(".md")), None)
         if main_file is None and files:
@@ -1120,11 +1148,17 @@ def _format_generated_history(items: list[dict], limit: int = 8) -> str:
             if publish_message and publish_message != status_label:
                 status_text += f" · {publish_message}"
             lines.append(f'<div class="history-card-row"><span>发布</span><code>{status_text}</code></div>')
-            if publish_details:
-                lines.append(f'<div class="history-card-row"><span>原因</span><code>{publish_details}</code></div>')
+            if publish_meta.get("is_final_draft"):
+                lines.append('<div class="history-card-row"><span>版本</span><code>最终稿</code></div>')
+            if publish_meta.get("cover_name"):
+                lines.append(f'<div class="history-card-row"><span>封面</span><code>{publish_meta["cover_name"]}</code></div>')
+            if publish_detail_text:
+                lines.append(f'<div class="history-card-row"><span>原因</span><code>{publish_detail_text}</code></div>')
         if task_id and task_id != "-":
             lines.append(f'<div class="history-card-command"><span>继续改</span><code>修改 task {task_id}，把开头写得更抓人</code></div>')
             lines.append(f'<div class="history-card-command"><span>通俗化</span><code>基于 task {task_id} 改得更通俗一点</code></div>')
+            if publish_meta.get("is_final_draft"):
+                lines.append(f'<div class="history-card-command"><span>最终稿</span><code>基于最终稿 task {task_id} 继续改写</code></div>')
         lines.append("</div>")
         lines.append("")
     return "\n".join(lines)
@@ -2447,7 +2481,7 @@ def create_chat_ui():
                         platform="gongzhonghao",
                         status="draft_saved",
                         message=result.get("message", "发布成功"),
-                        details=result.get("details", ""),
+                        details=_build_publish_archive_details(result.get("details", ""), cover_image),
                     )
                 history_md, history_update, ref_update = refresh_generated_history_controls()
                 target_line = f"\ntask：`{task_id}`\n文件：{gzh_file_path}" if task_id else f"\n文件：{gzh_file_path}"
