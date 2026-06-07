@@ -51,7 +51,7 @@
 - Python 3.9+（推荐 3.10 或 3.11）
 - 一个可用的 LLM API Key（默认推荐 DeepSeek）
 - 如需发布到公众号草稿箱：Node.js + [kuaifa CLI](https://github.com/shirenchuang/kuaifa)
-- 如需 RAG 检索：首次运行会加载/下载 BGE embedding 模型
+- 如需 RAG 检索：首次运行会加载/下载 BGE ONNX embedding 模型（fastembed）
 
 ### 1. 克隆项目并安装依赖
 
@@ -250,12 +250,9 @@ http://服务器IP:7861
 
 注意：
 
-- Docker 默认使用轻量依赖文件 `requirements-docker.txt`，用于内容生成和聊天 UI，不安装 `sentence-transformers` / `torch` / `chromadb` 等 RAG 重依赖。
-- 如果确实要在容器内启用完整 RAG，可改用完整依赖构建：
-
-```bash
-REQUIREMENTS_FILE=requirements.txt docker compose up -d --build
-```
+- Docker 默认使用轻量依赖文件 `requirements-docker.txt`，使用 `fastembed` + ONNX Runtime 替代 `sentence-transformers` / `torch`。
+- Docker 默认保留 `chromadb`，因此容器内也可以使用本地笔记检索；首次检索会下载约百 MB 级别的 BGE ONNX 模型。
+- `docker-compose.yml` 默认设置 `RAG_MODEL_CACHE_DIR=/app/data/fastembed_cache`，模型缓存会随 `./data` 持久化。
 
 - 国内服务器默认使用阿里云 apt / pip 源；如需切回官方源：
 
@@ -265,7 +262,7 @@ PIP_INDEX_URL=https://pypi.org/simple \
 docker compose build --no-cache
 ```
 
-- RAG 首次使用可能下载 embedding 模型，服务器需要能访问模型源，或提前挂载缓存。
+- RAG 首次使用可能下载 fastembed 的 ONNX embedding 模型，服务器需要能访问模型源，或提前挂载 `RAG_MODEL_CACHE_DIR` 缓存。
 - 公众号草稿箱发布依赖 Node.js 和 kuaifa CLI，当前 Dockerfile 未内置；如需在容器内发布公众号，可后续扩展镜像。
 
 ### 9. 传统 CLI 运行方式
