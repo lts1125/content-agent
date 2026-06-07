@@ -23,6 +23,7 @@ RUN if [ "$USE_CHINA_APT_MIRROR" = "true" ]; then \
        ca-certificates \
        curl \
        git \
+       gnupg \
        libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
