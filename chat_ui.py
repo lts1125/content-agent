@@ -2469,6 +2469,124 @@ def create_chat_ui():
             _format_user_preferences(prefs),
         )
     
+    # ------------------------------------------------------------------
+    # kuaifa 微信发布配置
+    # ------------------------------------------------------------------
+    _KUAIFA_CONFIG_DIR = Path.home() / ".kuaifa"
+    _KUAIFA_CONFIG_FILE = _KUAIFA_CONFIG_DIR / "config.json"
+
+    def _load_kuaifa_config() -> dict:
+        if _KUAIFA_CONFIG_FILE.exists():
+            try:
+                with open(_KUAIFA_CONFIG_FILE, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {}
+
+    def _save_kuaifa_config(appid: str, appsecret: str, api_key: str, default_author: str) -> str:
+        try:
+            _KUAIFA_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            config = _load_kuaifa_config()
+            if appid.strip():
+                config["appid"] = appid.strip()
+            if appsecret.strip():
+                config["appsecret"] = appsecret.strip()
+            if api_key.strip():
+                config["api-key"] = api_key.strip()
+            if default_author.strip():
+                config["default-author"] = default_author.strip()
+            with open(_KUAIFA_CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            return "✅ kuaifa 配置已保存"
+        except Exception as e:
+            return f"❌ 保存失败: {e}"
+
+    def _get_kuaifa_setup_status() -> str:
+        import shutil
+        import subprocess
+        kf = shutil.which("kuaifa")
+        if not kf:
+            home = Path.home()
+            for p in [
+                home / ".hermes" / "node" / "bin" / "kuaifa",
+                home / ".nvm" / "versions" / "node" / "current" / "bin" / "kuaifa",
+                home / ".local" / "bin" / "kuaifa",
+                Path("/usr/local/bin/kuaifa"),
+                Path("/opt/homebrew/bin/kuaifa"),
+            ]:
+                if p.exists():
+                    kf = str(p.resolve())
+                    break
+        if not kf:
+            return "❌ kuaifa CLI 未安装"
+        node = shutil.which("node")
+        if not node:
+            return "❌ 未找到 Node.js"
+        try:
+            env = os.environ.copy()
+            extra_paths = [str(Path(kf).parent), str(Path(node).parent)]
+            env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
+            result = subprocess.run(
+                [node, kf, "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+            return f"✅ kuaifa 已安装: {result.stdout.strip()}"
+        except Exception:
+            return "❌ kuaifa 检查失败"
+
+    def _verify_kuaifa_config() -> str:
+        import shutil
+        import subprocess
+        if not _KUAIFA_CONFIG_FILE.exists():
+            return "❌ 请先填写并保存微信 AppID 和 AppSecret"
+        try:
+            cfg = _load_kuaifa_config()
+            if not cfg.get("appid") or not cfg.get("appsecret"):
+                return "❌ 请先填写并保存微信 AppID 和 AppSecret"
+        except Exception:
+            return "❌ 请先填写并保存微信 AppID 和 AppSecret"
+        kf = shutil.which("kuaifa")
+        if not kf:
+            home = Path.home()
+            for p in [
+                home / ".hermes" / "node" / "bin" / "kuaifa",
+                home / ".nvm" / "versions" / "node" / "current" / "bin" / "kuaifa",
+                home / ".local" / "bin" / "kuaifa",
+                Path("/usr/local/bin/kuaifa"),
+                Path("/opt/homebrew/bin/kuaifa"),
+            ]:
+                if p.exists():
+                    kf = str(p.resolve())
+                    break
+        if not kf:
+            return "❌ kuaifa CLI 未安装"
+        node = shutil.which("node")
+        if not node:
+            return "❌ 未找到 Node.js"
+        try:
+            env = os.environ.copy()
+            extra_paths = [str(Path(kf).parent), str(Path(node).parent)]
+            env["PATH"] = os.pathsep.join(extra_paths + [env.get("PATH", "")])
+            result = subprocess.run(
+                [node, kf, "config", "verify-wechat"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+            )
+            if result.returncode == 0:
+                return "✅ 微信配置验证通过"
+            else:
+                return f"❌ 验证失败: {result.stderr or result.stdout}"
+        except subprocess.TimeoutExpired:
+            return "❌ 验证超时"
+        except Exception as e:
+            return f"❌ 验证异常: {e}"
+
     def publish_gzh(cover_image, gzh_file_path, publish_confirmed):
         """发布到微信公众号草稿箱"""
         if not gzh_file_path:
@@ -3170,6 +3288,37 @@ def create_chat_ui():
                         show_label=True,
                         elem_classes=["delivery-status"],
                     )
+                    with gr.Accordion("🔧 发布配置（kuaifa 微信公众号）", open=False):
+                        kuaifa_status = gr.Textbox(
+                            label="kuaifa 状态",
+                            value=_get_kuaifa_setup_status(),
+                            interactive=False,
+                        )
+                        kf_appid = gr.Textbox(
+                            label="微信 AppID",
+                            placeholder="wx...",
+                        )
+                        kf_appsecret = gr.Textbox(
+                            label="微信 AppSecret",
+                            placeholder="",
+                            type="password",
+                        )
+                        kf_api_key = gr.Textbox(
+                            label="kuaifa API Key",
+                            placeholder="kuaifa_...",
+                        )
+                        kf_author = gr.Textbox(
+                            label="默认作者名",
+                            placeholder="",
+                        )
+                        with gr.Row():
+                            save_kf_btn = gr.Button("💾 保存发布配置", size="sm", variant="secondary")
+                            verify_kf_btn = gr.Button("🔐 验证微信配置", size="sm", variant="secondary")
+                        kf_save_status = gr.Textbox(
+                            label="配置状态",
+                            value="",
+                            interactive=False,
+                        )
                     publish_btn = gr.Button("保存到公众号草稿箱", variant="primary", size="sm")
         
         # 事件绑定
@@ -3241,6 +3390,16 @@ def create_chat_ui():
             publish_gzh,
             inputs=[cover_upload, last_gzh_file, publish_confirm],
             outputs=[pub_status, history_panel, history_task_select, history_ref_select, publish_confirm]
+        )
+
+        save_kf_btn.click(
+            _save_kuaifa_config,
+            inputs=[kf_appid, kf_appsecret, kf_api_key, kf_author],
+            outputs=[kf_save_status],
+        )
+        verify_kf_btn.click(
+            _verify_kuaifa_config,
+            outputs=[kf_save_status],
         )
 
         refresh_history_btn.click(
