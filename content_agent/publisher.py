@@ -127,6 +127,9 @@ def publish_wechat_draft(
         "--title", title,
     ]
     if cover_path:
+        cover_path = os.path.expanduser(cover_path)
+        if os.path.exists(cover_path):
+            cover_path = os.path.abspath(cover_path)
         cmd.extend(["--cover", cover_path])
     if author:
         cmd.extend(["--author", author])
