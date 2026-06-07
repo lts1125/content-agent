@@ -20,4 +20,5 @@ services:
       - ./output:/app/output
       - ./data:/app/data
       - ./.content_agent:/root/.content_agent
+      - ~/.kuaifa:/root/.kuaifa
     restart: unless-stopped
