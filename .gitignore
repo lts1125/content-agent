@@ -12,8 +12,14 @@ output/
 build/
 dist/
 *.spec
+!scripts/*.spec
 
 # Local data
 data/
 .superpowers/
+
+# Windows build dependencies (large binaries)
+bin/node.exe
+bin/node_modules/
+bin/package-lock.json
 

@@ -8,23 +8,42 @@
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 
-class PublisherError(Exception):
-    """发布相关错误"""
-    pass
+def _get_bundle_dir() -> Path:
+    """
+    获取程序所在目录：
+    - PyInstaller 打包后：sys._MEIPASS（临时解压目录）
+    - 普通 Python 运行：脚本所在目录
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):  # type: ignore[attr-defined]
+        return Path(sys._MEIPASS)  # type: ignore[attr-defined]
+    return Path(__file__).resolve().parent.parent
 
 
 def _find_kuaifa() -> "str | None":
-    """查找 kuaifa 可执行文件，先用 shutil.which，再尝试常见安装路径"""
-    # 1. 尝试系统 PATH
+    """查找 kuaifa 可执行文件"""
+    # 1. 优先从打包目录查找（PyInstaller 或 exe 同级 bin/）
+    bundle_dir = _get_bundle_dir()
+    bundled_candidates = [
+        bundle_dir / "bin" / "kuaifa",
+        bundle_dir / "bin" / "kuaifa.cmd",
+        bundle_dir / "bin" / "node_modules" / ".bin" / "kuaifa",
+        bundle_dir / "bin" / "node_modules" / ".bin" / "kuaifa.cmd",
+    ]
+    for p in bundled_candidates:
+        if p.exists():
+            return str(p.resolve())
+
+    # 2. 系统 PATH
     kf = shutil.which("kuaifa")
     if kf:
         return kf
 
-    # 2. 尝试常见路径（包括 Hermes 安装的 node 模块）
+    # 3. 常见安装路径
     home = Path.home()
     candidates = [
         home / ".hermes" / "node" / "bin" / "kuaifa",
@@ -40,10 +59,23 @@ def _find_kuaifa() -> "str | None":
 
 
 def _find_node() -> "str | None":
-    """查找 node 可执行文件，kuaifa 的 shebang 依赖 env node"""
+    """查找 node 可执行文件"""
+    # 1. 优先从打包目录查找
+    bundle_dir = _get_bundle_dir()
+    bundled_candidates = [
+        bundle_dir / "bin" / "node.exe",
+        bundle_dir / "bin" / "node",
+    ]
+    for p in bundled_candidates:
+        if p.exists():
+            return str(p.resolve())
+
+    # 2. 系统 PATH
     node = shutil.which("node")
     if node:
         return node
+
+    # 3. 常见安装路径
     home = Path.home()
     candidates = [
         home / ".hermes" / "node" / "bin" / "node",
