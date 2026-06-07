@@ -1274,8 +1274,26 @@ def _detect_requested_platforms(message: str) -> list:
     return platforms or ["gongzhonghao"]
 
 
-def _clean_original_user_message_for_revision(message: str) -> str:
+def _message_content_to_text(content) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        for key in ("text", "content", "value"):
+            value = content.get(key)
+            if isinstance(value, str):
+                return value
+        return ""
+    if isinstance(content, (list, tuple)):
+        parts = [_message_content_to_text(part) for part in content]
+        return "\n".join(part for part in parts if part)
+    return str(content)
+
+
+def _clean_original_user_message_for_revision(message) -> str:
     """清理聊天展示文本，只保留用户原始需求。"""
+    message = _message_content_to_text(message)
     lines = []
     for line in (message or "").splitlines():
         stripped = line.strip()
@@ -1287,6 +1305,14 @@ def _clean_original_user_message_for_revision(message: str) -> str:
             break
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+def _is_non_text_chat_content(content) -> bool:
+    if isinstance(content, (list, tuple)):
+        return True
+    if isinstance(content, dict):
+        return not any(isinstance(content.get(key), str) for key in ("text", "content", "value"))
+    return False
 
 
 def _filter_revision_prompt_for_platforms(revision_prompt: str, platforms: list[str]) -> str:
@@ -1318,8 +1344,12 @@ def _build_review_revision_message(panel, chat_history: list, max_attempts: int)
     original_message = ""
     for msg in reversed(chat_history):
         if msg.get("role") == "user":
-            original_message = _clean_original_user_message_for_revision(msg.get("content", ""))
-            break
+            content = msg.get("content", "")
+            if _is_non_text_chat_content(content):
+                continue
+            original_message = _clean_original_user_message_for_revision(content)
+            if original_message:
+                break
 
     content = panel.raw_content
     previous_parts = []

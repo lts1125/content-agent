@@ -1,8 +1,7 @@
 """
-BGE 嵌入模型封装
+BGE 嵌入模型封装（fastembed 轻量版）
 
-使用 BAAI/bge-small-zh-v1.5 生成文本向量。
-优先加载本地模型，避免离线环境下检索阶段卡在 HuggingFace 联网检查。
+使用 BAAI/bge-small-zh-v1.5 ONNX 模型，无需 PyTorch。
 """
 
 import os
@@ -13,81 +12,64 @@ import numpy as np
 
 
 class BGEEmbedder:
-    """BGE 文本嵌入模型"""
+    """BGE 文本嵌入模型（ONNX 轻量版）"""
 
     MODEL_NAME = "BAAI/bge-small-zh-v1.5"
     DIMENSION = 512
 
     def __init__(self, model_path: str = None):
         self._model = None
-        self.model_path = model_path or os.getenv("RAG_MODEL_PATH") or os.getenv("BGE_MODEL_PATH")
+        legacy_path = os.getenv("RAG_MODEL_PATH") or os.getenv("BGE_MODEL_PATH")
+        configured_model = model_path or os.getenv("RAG_MODEL_NAME")
+        self.model_name = configured_model or self.MODEL_NAME
+        self.cache_dir = os.getenv("RAG_MODEL_CACHE_DIR")
 
-    def _resolve_model_path(self) -> str:
-        """返回优先使用的模型路径或模型名。"""
-        if self.model_path:
-            p = Path(self.model_path).expanduser()
-            if p.exists():
-                return str(p)
-            print(f"[BGEEmbedder] 本地模型路径不存在，回退到模型名: {p}")
-
-        snapshot = self._find_hf_snapshot()
-        if snapshot:
-            return str(snapshot)
-
-        return self.MODEL_NAME
-
-    @staticmethod
-    def _find_hf_snapshot() -> Path:
-        """查找 HuggingFace 默认缓存中的完整 snapshot。"""
-        cache_root = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
-        model_root = cache_root / "hub" / "models--BAAI--bge-small-zh-v1.5" / "snapshots"
-        if not model_root.exists():
-            return None
-
-        required = ("modules.json", "config.json", "config_sentence_transformers.json")
-        for snapshot in sorted(model_root.iterdir(), reverse=True):
-            if snapshot.is_dir() and all((snapshot / name).exists() for name in required):
-                return snapshot
-        return None
+        # 兼容旧配置：如果 RAG_MODEL_PATH/BGE_MODEL_PATH 指向本地目录，
+        # 在 fastembed 中作为缓存目录使用；否则把它当作模型名。
+        if not configured_model and legacy_path:
+            path = Path(legacy_path).expanduser()
+            if path.exists():
+                self.cache_dir = str(path)
+            else:
+                self.model_name = legacy_path
 
     def _load_model(self):
         """延迟加载模型"""
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-            model_name_or_path = self._resolve_model_path()
-            local_only = Path(model_name_or_path).expanduser().exists()
-            print(f"[BGEEmbedder] 加载模型: {model_name_or_path}")
-            self._model = SentenceTransformer(
-                model_name_or_path,
-                local_files_only=local_only,
-            )
+            from fastembed import TextEmbedding
+
+            print(f"[BGEEmbedder] 加载模型: {self.model_name}")
+            self._model = TextEmbedding(model_name=self.model_name, cache_dir=self.cache_dir)
             print(f"[BGEEmbedder] 模型加载完成")
         return self._model
 
     def embed(self, text: str) -> List[float]:
         """单条文本嵌入"""
         model = self._load_model()
-        vector = model.encode(text, normalize_embeddings=True)
-        return vector.tolist()
+        vectors = list(model.embed([text]))
+        vector = vectors[0]
+        # fastembed 已经做了归一化，但再归一化一次确保
+        normalized = vector / (np.linalg.norm(vector) + 1e-12)
+        return normalized.tolist()
 
     def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         """批量文本嵌入"""
         if not texts:
             return []
         model = self._load_model()
-        vectors = model.encode(
-            texts,
-            batch_size=batch_size,
-            normalize_embeddings=True,
-            show_progress_bar=len(texts) > 50,
-        )
-        return [v.tolist() for v in vectors]
+        vectors = list(model.embed(texts, batch_size=batch_size))
+        # 归一化
+        normalized = []
+        for v in vectors:
+            nv = v / (np.linalg.norm(v) + 1e-12)
+            normalized.append(nv.tolist())
+        return normalized
 
     def similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """计算两个向量的余弦相似度"""
         v1 = np.array(vec1)
         v2 = np.array(vec2)
-        return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2)))
+        return float(np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-12))
 
 
 def demo():

@@ -10,5 +10,5 @@ watchdog
 apscheduler
 pyyaml
 chromadb
-sentence-transformers
+fastembed==0.7.4
 numpy

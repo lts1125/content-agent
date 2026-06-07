@@ -876,6 +876,36 @@ class ChatIntentTest(unittest.TestCase):
         self.assertNotIn("[小红书] 标题缺少 emoji", message)
         self.assertNotIn("记忆索引", message)
 
+    def test_review_revision_message_skips_tuple_user_content(self):
+        panel = type(
+            "Panel",
+            (),
+            {
+                "platforms": ["gongzhonghao"],
+                "raw_content": type(
+                    "Content",
+                    (),
+                    {"gongzhonghao": "# 上一版公众号\n\n正文"},
+                )(),
+                "revision_count": 2,
+                "get_revision_prompt": lambda self: "[公众号] 继续提升通俗度",
+            },
+        )()
+
+        message = chat_ui._build_review_revision_message(
+            panel,
+            [
+                {"role": "user", "content": "根据这篇笔记内容生成公众号文章，给非技术人员阅读"},
+                {"role": "assistant", "content": "第一次评分未达标"},
+                {"role": "user", "content": ("main.py", "main.py")},
+            ],
+            max_attempts=2,
+        )
+
+        self.assertIn("给非技术人员阅读", message)
+        self.assertNotIn("main.py", message)
+        self.assertIn("第 2/2 次修改", message)
+
     def test_extracts_writing_requirements_from_user_request(self):
         intent = chat_ui.ChatAgent()._analyze_intent(
             "帮我写一篇给小白介绍 AI Agent 的公众号文章，讲得通俗易懂一点，像程序员给朋友解释，少用术语，不要太营销"

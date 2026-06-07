@@ -28,6 +28,7 @@ class DockerConfigTest(unittest.TestCase):
         self.assertIn("USE_CHINA_APT_MIRROR:", compose)
         self.assertIn('"7861:7861"', compose)
         self.assertIn("env_file:", compose)
+        self.assertIn("RAG_MODEL_CACHE_DIR: /app/data/fastembed_cache", compose)
         self.assertIn("./output:/app/output", compose)
         self.assertIn("./data:/app/data", compose)
         self.assertIn(".content_agent:/root/.content_agent", compose)
@@ -38,16 +39,18 @@ class DockerConfigTest(unittest.TestCase):
         for pattern in [".git", ".venv", ".env", "output", "data", "__pycache__", "*.pyc"]:
             self.assertIn(pattern, dockerignore)
 
-    def test_docker_requirements_excludes_rag_heavy_dependencies(self):
+    def test_docker_requirements_uses_fastembed_without_pytorch_stack(self):
         docker_reqs = (ROOT / "requirements-docker.txt").read_text(encoding="utf-8")
 
         self.assertIn("gradio==4.44.1", docker_reqs)
         self.assertIn("huggingface-hub==0.36.2", docker_reqs)
         self.assertIn("pydantic-ai-slim[openai]==0.8.1", docker_reqs)
         self.assertIn("ddgs", docker_reqs)
+        self.assertIn("chromadb==1.5.9", docker_reqs)
+        self.assertIn("fastembed==0.7.4", docker_reqs)
         self.assertNotIn("duckduckgo-search", docker_reqs)
         self.assertNotIn("sentence-transformers", docker_reqs)
-        self.assertNotIn("chromadb", docker_reqs)
+        self.assertNotIn("torch", docker_reqs)
 
 
 if __name__ == "__main__":
