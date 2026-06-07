@@ -15,6 +15,7 @@ services:
       GRADIO_SERVER_NAME: 0.0.0.0
       GRADIO_SERVER_PORT: 7861
       RAG_MODEL_CACHE_DIR: /app/data/fastembed_cache
+      HF_ENDPOINT: https://hf-mirror.com
     volumes:
       - ./output:/app/output
       - ./data:/app/data
